@@ -57,6 +57,7 @@
 #include <libraries/libusb-1.h>
 #include <interfaces/libusb-1.h>
 #include <proto/exec.h>
+#include <proto/dos.h>
 #include <proto/libusb-1.h>
 
 // AmigaOS 4 SDK defines UNUSED as __attribute__((unused)); BTstack needs the (void) form
@@ -90,7 +91,12 @@
 
 #define USB_VENDOR_ID_REALTEK 0x0bda
 
-#define TLV_DB_PATH_PREFIX "T:btstack_"
+// Bonding keys live here. Not T:, which is wiped on reboot: a pairing the user
+// made once has to survive, or every restart means pairing the mouse again.
+#define TLV_DB_FOLDER      "ENVARC:Bluetooth"
+#define TLV_DB_PATH_PREFIX TLV_DB_FOLDER "/btstack_"
+// used when the folder cannot be created, e.g. a read-only ENVARC:
+#define TLV_DB_PATH_PREFIX_FALLBACK "T:btstack_"
 #define TLV_DB_PATH_POSTFIX ".tlv"
 
 // AmigaOS 4 libusb-1.library explicit open/close
@@ -155,6 +161,22 @@ static btstack_packet_callback_registration_t hci_event_callback_registration;
 
 // shutdown
 static bool shutdown_triggered;
+
+// Make sure the bonding folder exists and return the prefix to use for the TLV
+// file. Falls back to T: rather than failing: better a stack that works and
+// forgets its pairings than one that does not come up at all.
+static const char * tlv_db_path_prefix(void){
+    BPTR lock = Lock(TLV_DB_FOLDER, SHARED_LOCK);
+    if (lock == ZERO){
+        lock = CreateDir(TLV_DB_FOLDER);
+        if (lock == ZERO){
+            printf("WARNING: cannot create %s, pairings will not survive a reboot\n", TLV_DB_FOLDER);
+            return TLV_DB_PATH_PREFIX_FALLBACK;
+        }
+    }
+    UnLock(lock);
+    return TLV_DB_PATH_PREFIX;
+}
 
 static void local_version_information_handler(uint8_t * packet){
     printf("Local version information:\n");
@@ -228,7 +250,7 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
                     if (using_static_address){
                         memcpy(local_addr, static_address, 6);
                     }
-                    btstack_strcpy(tlv_db_path, sizeof(tlv_db_path), TLV_DB_PATH_PREFIX);
+                    btstack_strcpy(tlv_db_path, sizeof(tlv_db_path), tlv_db_path_prefix());
                     btstack_strcat(tlv_db_path, sizeof(tlv_db_path), bd_addr_to_str_with_delimiter(local_addr, '-'));
                     btstack_strcat(tlv_db_path, sizeof(tlv_db_path), TLV_DB_PATH_POSTFIX);
                     printf("TLV path: %s", tlv_db_path);

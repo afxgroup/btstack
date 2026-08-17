@@ -70,7 +70,10 @@ file(GLOB SOURCES_POSIX     "${BTSTACK_ROOT}/platform/posix/*.c")
 # Applications living in this folder (they define btstack_main) must not end up
 # in the library, or they would clash with every example.
 file(GLOB SOURCES_LIBUSB    "${CMAKE_SOURCE_DIR}/*.c")
-list(REMOVE_ITEM SOURCES_LIBUSB ${CMAKE_SOURCE_DIR}/bthid.c)
+list(REMOVE_ITEM SOURCES_LIBUSB
+    ${CMAKE_SOURCE_DIR}/bthid.c
+    ${CMAKE_SOURCE_DIR}/bluetooth_service.c
+)
 file(GLOB SOURCES_ZEPHYR    "${BTSTACK_ROOT}/chipset/zephyr/*.c")
 file(GLOB SOURCES_REALTEK   "${BTSTACK_ROOT}/chipset/realtek/*.c")
 file(GLOB SOURCES_LC3_GOOGLE "${BTSTACK_ROOT}/3rd-party/lc3-google/src/*.c")
@@ -228,6 +231,14 @@ foreach(EXAMPLE ${EXAMPLES})
 endforeach(EXAMPLE)
 
 # AmigaOS 4 applications from this folder (not BTstack examples).
-# Note: no GATT DB - bthid is a HID host and runs no ATT server, see bthid.c
+# Note: no GATT DB - these are HID hosts and run no ATT server, see bthid.c
+
+# bluetooth_service.h is shared with bt.usbfd and the future GUI: one definition
+# of the protocol, included from where it lives instead of being copied
+include_directories(${CMAKE_SOURCE_DIR}/../amigaos4-usbfd)
+
 add_executable(bthid ${CMAKE_SOURCE_DIR}/bthid.c)
 target_link_libraries(bthid btstack)
+
+add_executable(BluetoothService ${CMAKE_SOURCE_DIR}/bluetooth_service.c)
+target_link_libraries(BluetoothService btstack)
