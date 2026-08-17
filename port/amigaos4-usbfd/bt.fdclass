@@ -1,0 +1,6 @@
+FUNCTIONDRIVER
+NAME      "Bluetooth hotplug helper"
+CLASS     0xE0
+TYPE      INTERFACE
+PRI       -10
+DRIVER    "bt.usbfd"

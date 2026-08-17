@@ -1,0 +1,4 @@
+*.o
+*.map
+bt.usbfd
+bt.usbfd.debug
