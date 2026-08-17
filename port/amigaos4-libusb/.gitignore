@@ -1,0 +1,4 @@
+build/
+*.pklg
+log.txt
+usb.txt

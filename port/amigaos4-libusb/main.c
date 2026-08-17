@@ -51,7 +51,7 @@
 #include <signal.h>
 #include <unistd.h>
 
-#define __USE_INLINE__
+// note: __USE_INLINE__ is defined globally by CMakeLists.txt
 #include <exec/exec.h>
 #include <interfaces/exec.h>
 #include <libraries/libusb-1.h>
@@ -67,6 +67,7 @@
 #include <btstack_config.h>
 
 #include "ble/le_device_db_tlv.h"
+#include "ble/sm.h"
 #include "bluetooth_company_id.h"
 #include "btstack_audio.h"
 #include "btstack_chipset_realtek.h"
@@ -75,8 +76,9 @@
 #include "btstack_event.h"
 #include "btstack_memory.h"
 #include "btstack_run_loop.h"
-#include "btstack_run_loop_posix.h"
-#include "btstack_signal.h"
+#include "btstack_run_loop_amigaos.h"
+#include "btstack_stdin.h"
+#include "amigaos4_input.h"
 #include "btstack_tlv_posix.h"
 #include "classic/btstack_link_key_db_tlv.h"
 #include "hal_led.h"
@@ -92,6 +94,13 @@
 #define TLV_DB_PATH_POSTFIX ".tlv"
 
 // AmigaOS 4 libusb-1.library explicit open/close
+//
+// Note: proto/libusb-1.h only declares 'extern struct Libusb1IFace *ILibusb1'
+// (the inline4 macros dereference it). The definition normally comes from the
+// libusb-1.a link stubs; as we open the library and get the interface ourselves,
+// this port provides the global instead and does not link the stubs.
+struct Libusb1IFace       * ILibusb1;
+
 static struct Library     * libusb1_base;
 static struct Libusb1IFace * libusb1_iface;
 
@@ -129,6 +138,10 @@ static void amigaos4_libusb1_close(void){
 }
 static char tlv_db_path[100];
 static bool tlv_reset;
+// folder that contains the Realtek firmware/config files, NULL = current directory
+static const char * firmware_folder_path;
+// accept LE Legacy Pairing, i.e. leave LE Secure Connections Only mode
+static bool allow_legacy_pairing;
 static const btstack_tlv_t * tlv_impl;
 static btstack_tlv_posix_t   tlv_context;
 static bd_addr_t             local_addr;
@@ -198,6 +211,11 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
             // set Product ID for Realtek Controllers and use Realtek-specific stack startup
             if (vendor_id == USB_VENDOR_ID_REALTEK) {
                 printf("Realtek Controller - requires firmware and config download\n");
+                printf("Note: files must be uncompressed (no .zst) and named exactly as printed below\n");
+                if (firmware_folder_path != NULL){
+                    btstack_chipset_realtek_set_firmware_folder_path(firmware_folder_path);
+                    btstack_chipset_realtek_set_config_folder_path(firmware_folder_path);
+                }
                 btstack_chipset_realtek_set_product_id(product_id);
                 hci_set_chipset(btstack_chipset_realtek_instance());
                 hci_enable_custom_pre_init();
@@ -237,7 +255,10 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
                     btstack_tlv_posix_deinit(&tlv_context);
                     if (!shutdown_triggered) break;
                     log_info("Good bye, see you.\n");
-                    exit(0);
+                    printf("Bluetooth off, leaving run loop\n");
+                    // leave the run loop instead of exit(): main() then does the
+                    // cleanup in one single, well defined shutdown path
+                    btstack_run_loop_trigger_exit();
                     break;
                 default:
                     break;
@@ -268,11 +289,10 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
 }
 
 static void trigger_shutdown(void){
-    printf("CTRL-C - SIGINT received, shutting down..\n");
-    log_info("sigint_handler: shutting down");
+    log_info("trigger_shutdown: powering off");
     shutdown_triggered = true;
     hci_power_control(HCI_POWER_OFF);
-    // libusb-1.library will be closed by atexit handler registered below
+    // the run loop keeps running until HCI reports HCI_STATE_OFF, see above
 }
 
 static void amigaos4_atexit_close_libusb(void){
@@ -286,21 +306,25 @@ void hal_led_toggle(void){
     printf("LED State %u\n", led_state);
 }
 
-static char short_options[] = "hu:l:r:b:";
+static char short_options[] = "hu:l:rf:p";
 
 static struct option long_options[] = {
     {"help",        no_argument,        NULL,   'h'},
     {"logfile",    required_argument,  NULL,   'l'},
     {"reset-tlv",    no_argument,       NULL,   'r'},
     {"usbpath",    required_argument,  NULL,   'u'},
+    {"fwpath",     required_argument,  NULL,   'f'},
+    {"legacy-pairing", no_argument,    NULL,   'p'},
     {0, 0, 0, 0}
 };
 
 static char *help_options[] = {
     "print (this) help.",
-    "set file to store debug output and HCI trace.",
+    "set file to store debug output and HCI trace (off by default: costs CPU).",
     "reset bonding information stored in TLV.",
     "set USB path, format BUS:PORT-PORT-PORT, e.g. 1:1.2.3 of Bluetooth Controller.",
+    "set folder with Realtek firmware/config files, default: current directory.",
+    "accept LE Legacy Pairing, for devices without LE Secure Connections.",
 };
 
 static char *option_arg_name[] = {
@@ -308,6 +332,8 @@ static char *option_arg_name[] = {
     "LOGFILE",
     "",
     "USBPATH",
+    "FWPATH",
+    "",
 };
 
 static void usage(const char *name){
@@ -328,14 +354,19 @@ int main(int argc, const char * argv[]){
     const char * usb_path_string = NULL;
     const char * log_file_path = NULL;
 
-    // parse command line parameters
+    // parse command line parameters.
+    // Options we do not know belong to the application (btstack_main gets the
+    // same argv and e.g. bthid has -t and -v), so skip them instead of
+    // complaining and stopping - that would silently drop our own options
+    // appearing after them.
+    opterr = 0;
     while(true){
         int c = getopt_long(argc, (char* const*)argv, short_options, long_options, NULL);
         if (c < 0) {
             break;
         }
         if (c == '?'){
-            break;
+            continue;
         }
         switch (c) {
             case 'u':
@@ -346,6 +377,12 @@ int main(int argc, const char * argv[]){
                 break;
             case 'r':
                 tlv_reset = true;
+                break;
+            case 'f':
+                firmware_folder_path = optarg;
+                break;
+            case 'p':
+                allow_legacy_pairing = true;
                 break;
             case 'h':
             default:
@@ -388,7 +425,7 @@ int main(int argc, const char * argv[]){
     atexit(amigaos4_atexit_close_libusb);
 
     btstack_memory_init();
-    btstack_run_loop_init(btstack_run_loop_posix_get_instance());
+    btstack_run_loop_init(btstack_run_loop_amigaos_get_instance());
 
     if (usb_path_len){
         // Note: if usb_bus was not set, has the same effect as calling
@@ -396,22 +433,17 @@ int main(int argc, const char * argv[]){
         hci_transport_usb_set_bus_and_path(usb_bus, usb_path_len, usb_path);
     }
 
-    // log into file using HCI_DUMP_PACKETLOGGER format
-    char pklg_path[100];
-    if (log_file_path == NULL){
-        btstack_strcpy(pklg_path, sizeof(pklg_path),  "T:hci_dump");
-        if (usb_path_len){
-            btstack_strcat(pklg_path, sizeof(pklg_path),  "_");
-            btstack_strcat(pklg_path, sizeof(pklg_path),  usb_path_string);
-        }
-        btstack_strcat(pklg_path, sizeof(pklg_path), ".pklg");
-        log_file_path = pklg_path;
+    // Packet log in HCI_DUMP_PACKETLOGGER format, only when asked for with -l.
+    // It is not free: every packet costs a formatting pass plus unbuffered
+    // write() calls, and with hci_dump uninitialised every log_info() in the
+    // stack short-circuits as well. That matters for a data path like a mouse
+    // that produces packets continuously.
+    if (log_file_path != NULL){
+        hci_dump_posix_fs_open(log_file_path, HCI_DUMP_PACKETLOGGER);
+        const hci_dump_t * hci_dump_impl = hci_dump_posix_fs_get_instance();
+        hci_dump_init(hci_dump_impl);
+        printf("Packet Log: %s\n", log_file_path);
     }
-
-    hci_dump_posix_fs_open(log_file_path, HCI_DUMP_PACKETLOGGER);
-    const hci_dump_t * hci_dump_impl = hci_dump_posix_fs_get_instance();
-    hci_dump_init(hci_dump_impl);
-    printf("Packet Log: %s\n", log_file_path);
 
     // init HCI
     hci_init(hci_transport_usb_instance(), NULL);
@@ -420,8 +452,10 @@ int main(int argc, const char * argv[]){
     hci_event_callback_registration.callback = &packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
 
-    // register callback for CTRL-c
-    btstack_signal_register_callback(SIGINT, &trigger_shutdown);
+    // register callback for CTRL-C. Note: not btstack_signal_register_callback(),
+    // that one needs the posix run loop's pipe/select mechanism which does not
+    // work here - the AmigaOS run loop waits on SIGBREAKF_CTRL_C itself.
+    btstack_run_loop_amigaos_set_break_handler(&trigger_shutdown);
 
     // register known Realtek USB Controllers
     uint16_t realtek_num_controllers = btstack_chipset_realtek_get_num_usb_controllers();
@@ -436,11 +470,46 @@ int main(int argc, const char * argv[]){
     // setup app
     btstack_main(argc, argv);
 
+    // sm_init() - called by the example above - always enables LE Secure
+    // Connections Only mode when ENABLE_LE_SECURE_CONNECTIONS is configured, so
+    // this has to be undone here, after the example is set up. Without it,
+    // pairing with a device that only supports LE Legacy Pairing is rejected
+    // with SM_REASON_AUTHENTHICATION_REQUIREMENTS (reason 3).
+    if (allow_legacy_pairing){
+        printf("LE Legacy Pairing accepted (LE Secure Connections not required)\n");
+        sm_set_secure_connections_only_mode(false);
+    }
+
     // go
     btstack_run_loop_execute();
 
-    // Close AmigaOS 4 libusb-1.library on clean exit
-    amigaos4_libusb1_close();
+    // Shutdown. Every step is printed: if the process ever hangs on the way out,
+    // the last line printed says exactly which step did not return.
+    printf("shutdown: run loop left\n");
 
+    // put the console back into normal mode
+    btstack_stdin_reset();
+
+    // release input.device if an application (e.g. bthid) opened it. Does
+    // nothing otherwise, and releases held mouse buttons before closing.
+    amigaos4_input_dump_stats();
+    amigaos4_input_close();
+
+    // A forced exit (second CTRL-C) leaves the HCI state machine mid-flight, so
+    // close the transport explicitly - this releases the USB interface and closes
+    // the device in any case.
+    hci_transport_usb_instance()->close();
+    printf("shutdown: transport closed\n");
+
+    hci_dump_posix_fs_close();
+    printf("shutdown: packet log closed\n");
+
+    btstack_run_loop_amigaos_deinit();
+    printf("shutdown: run loop deinit done\n");
+
+    amigaos4_libusb1_close();
+    printf("shutdown: libusb-1.library closed\n");
+
+    printf("shutdown: bye\n");
     return 0;
 }

@@ -66,8 +66,11 @@ file(GLOB SOURCES_HXCMOD    "${BTSTACK_ROOT}/3rd-party/hxcmod-player/*.c"  "${BT
 file(GLOB SOURCES_QRCODEGEN "${BTSTACK_ROOT}/3rd-party/qr-code-generator/qrcodegen.c")
 file(GLOB SOURCES_RIJNDAEL  "${BTSTACK_ROOT}/3rd-party/rijndael/rijndael.c")
 file(GLOB SOURCES_POSIX     "${BTSTACK_ROOT}/platform/posix/*.c")
-# AmigaOS 4 libusb HCI transport (synchronous libusb-1.library wrapper)
+# AmigaOS 4 port sources: HCI transport, run loop, console input, input.device.
+# Applications living in this folder (they define btstack_main) must not end up
+# in the library, or they would clash with every example.
 file(GLOB SOURCES_LIBUSB    "${CMAKE_SOURCE_DIR}/*.c")
+list(REMOVE_ITEM SOURCES_LIBUSB ${CMAKE_SOURCE_DIR}/bthid.c)
 file(GLOB SOURCES_ZEPHYR    "${BTSTACK_ROOT}/chipset/zephyr/*.c")
 file(GLOB SOURCES_REALTEK   "${BTSTACK_ROOT}/chipset/realtek/*.c")
 file(GLOB SOURCES_LC3_GOOGLE "${BTSTACK_ROOT}/3rd-party/lc3-google/src/*.c")
@@ -123,12 +126,18 @@ list(REMOVE_ITEM SOURCES_BLE   ${SOURCES_BLE_OFF})
 file(GLOB SOURCES_POSIX_OFF "${BTSTACK_ROOT}/platform/posix/le_device_db_fs.c")
 list(REMOVE_ITEM SOURCES_POSIX ${SOURCES_POSIX_OFF})
 
-# AmigaOS 4: exclude POSIX files that depend on host-specific features
+# AmigaOS 4: exclude POSIX files that depend on host-specific features.
+# btstack_run_loop_posix.c and btstack_stdin_posix.c are replaced by the native
+# implementations in this folder: their select()/pipe() based waiting does not
+# work on AmigaOS 4. btstack_signal.c needs the posix run loop's pipes.
 list(REMOVE_ITEM SOURCES_POSIX
     ${BTSTACK_ROOT}/platform/posix/btstack_network_posix.c
     ${BTSTACK_ROOT}/platform/posix/btstack_audio_portaudio.c
     ${BTSTACK_ROOT}/platform/posix/btstack_audio_sdl2.c
     ${BTSTACK_ROOT}/platform/posix/btstack_sco_transport_posix_i2s_test_bridge.c
+    ${BTSTACK_ROOT}/platform/posix/btstack_run_loop_posix.c
+    ${BTSTACK_ROOT}/platform/posix/btstack_stdin_posix.c
+    ${BTSTACK_ROOT}/platform/posix/btstack_signal.c
 )
 
 set(SOURCES
@@ -155,10 +164,10 @@ list(SORT SOURCES)
 # create static lib
 add_library(btstack STATIC ${SOURCES})
 
-# AmigaOS 4 libusb-1.library stubs
-set(LIBUSB1_ROOT ${BTSTACK_ROOT}/libusb-1)
-target_include_directories(btstack PUBLIC ${LIBUSB1_ROOT}/SDK/local/common/include)
-target_link_libraries(btstack ${LIBUSB1_ROOT}/Source/stubs/libusb-1.a)
+# AmigaOS 4 libusb-1.library
+# Note: no link stubs (libusb-1.a) needed - with __USE_INLINE__ (see above) all
+# libusb_* calls go through the inline4 macros on ILibusb1, and main.c opens the
+# library / gets the interface explicitly and defines the ILibusb1 global itself.
 
 # pthread
 find_package(Threads)
@@ -217,3 +226,8 @@ foreach(EXAMPLE ${EXAMPLES})
     add_executable(${EXAMPLE} ${SOURCES_EXAMPLE})
     target_link_libraries(${EXAMPLE} btstack)
 endforeach(EXAMPLE)
+
+# AmigaOS 4 applications from this folder (not BTstack examples).
+# Note: no GATT DB - bthid is a HID host and runs no ATT server, see bthid.c
+add_executable(bthid ${CMAKE_SOURCE_DIR}/bthid.c)
+target_link_libraries(bthid btstack)

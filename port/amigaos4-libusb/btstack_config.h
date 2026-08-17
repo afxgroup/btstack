@@ -7,6 +7,7 @@
 
 // Port related features
 #define HAVE_ASSERT
+#define HAVE_BTSTACK_STDIN
 #define HAVE_MALLOC
 #define HAVE_POSIX_FILE_IO
 #define HAVE_POSIX_TIME
@@ -35,7 +36,9 @@
 #define ENABLE_MODPLAYER
 #define ENABLE_PRINTF_HEXDUMP
 #define ENABLE_PRINTF_TO_LOG
-#define ENABLE_SCO_OVER_HCI
+// NOTE: not enabled - hci_transport_h2_libusb.c does not handle the SCO endpoints
+// (isochronous transfers / alternate settings) yet
+// #define ENABLE_SCO_OVER_HCI
 #define ENABLE_SDP_DES_DUMP
 #define ENABLE_SOFTWARE_AES128
 
