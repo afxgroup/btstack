@@ -168,6 +168,38 @@ void hci_transport_usb_set_bus_and_path(uint8_t bus, int len, uint8_t* port_numb
     usb_bus = bus;
 }
 
+/*
+ * A device that declares class 0 leaves the classification to its interfaces,
+ * which is what most dongles do. Look for the Bluetooth interface there:
+ * Wireless Controller / RF Controller / Bluetooth programming.
+ */
+static bool usb_device_has_bt_interface(libusb_device * device){
+    struct libusb_config_descriptor * config;
+    if (libusb_get_config_descriptor(device, 0, &config) != 0) return false;
+    if (config == NULL) return false;
+
+    bool found = false;
+    for (int i = 0; (i < config->bNumInterfaces) && !found; i++){
+        const struct libusb_interface * iface = &config->interface[i];
+        if (!iface || !iface->altsetting) continue;
+        for (int a = 0; a < iface->num_altsetting; a++){
+            const struct libusb_interface_descriptor * alt = &iface->altsetting[a];
+            if (!alt) continue;
+            printf("      interface %d/%d: class %02x/%02x/%02x\n", i, a,
+                   alt->bInterfaceClass, alt->bInterfaceSubClass, alt->bInterfaceProtocol);
+            if ((alt->bInterfaceClass    == 0xE0) &&
+                (alt->bInterfaceSubClass == 0x01) &&
+                (alt->bInterfaceProtocol == 0x01)){
+                found = true;
+                break;
+            }
+        }
+    }
+
+    libusb_free_config_descriptor(config);
+    return found;
+}
+
 static libusb_device * usb_find_device(void){
     libusb_device ** list;
     ssize_t cnt = libusb_get_device_list(usb_ctx, &list);
@@ -187,6 +219,9 @@ static libusb_device * usb_find_device(void){
          * still needs its own driver on top, see btstack_chipset_realtek.
          */
         if ((desc.bDeviceClass == 0xE0) && (desc.bDeviceSubClass == 0x01) && (desc.bDeviceProtocol == 0x01)){
+            found = list[i];
+        } else if ((desc.bDeviceClass == 0x00) && usb_device_has_bt_interface(list[i])){
+            /* classification left to the interfaces, which is legal and common */
             found = list[i];
         } else {
             /* known device that does not declare the standard class */
