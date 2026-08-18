@@ -176,19 +176,36 @@ static libusb_device * usb_find_device(void){
     for (ssize_t i = 0; i < cnt; i++){
         struct libusb_device_descriptor desc;
         if (libusb_get_device_descriptor(list[i], &desc) != 0) continue;
-        printf("USB: %04x:%04x\n", desc.idVendor, desc.idProduct);
-        btstack_linked_list_iterator_t it;
-        btstack_linked_list_iterator_init(&it, &usb_known_devices);
-        while (btstack_linked_list_iterator_has_next(&it)){
-            usb_known_device_t * k = (usb_known_device_t *) btstack_linked_list_iterator_next(&it);
-            if (desc.idVendor == k->vendor_id && desc.idProduct == k->product_id){
-                found = list[i];
-                usb_vendor_id = desc.idVendor;
-                usb_product_id = desc.idProduct;
-                break;
+        printf("USB: %04x:%04x (class %02x/%02x/%02x)\n", desc.idVendor, desc.idProduct,
+               desc.bDeviceClass, desc.bDeviceSubClass, desc.bDeviceProtocol);
+
+        /*
+         * Any controller that says it speaks Bluetooth is taken: Wireless
+         * Controller / RF Controller / Bluetooth programming. This is what makes
+         * a dongle nobody ever heard of work, as long as it is a plain HCI
+         * controller - which most are. A chipset that needs a firmware upload
+         * still needs its own driver on top, see btstack_chipset_realtek.
+         */
+        if ((desc.bDeviceClass == 0xE0) && (desc.bDeviceSubClass == 0x01) && (desc.bDeviceProtocol == 0x01)){
+            found = list[i];
+        } else {
+            /* known device that does not declare the standard class */
+            btstack_linked_list_iterator_t it;
+            btstack_linked_list_iterator_init(&it, &usb_known_devices);
+            while (btstack_linked_list_iterator_has_next(&it)){
+                usb_known_device_t * k = (usb_known_device_t *) btstack_linked_list_iterator_next(&it);
+                if ((desc.idVendor == k->vendor_id) && (desc.idProduct == k->product_id)){
+                    found = list[i];
+                    break;
+                }
             }
         }
-        if (found) break;
+
+        if (found){
+            usb_vendor_id  = desc.idVendor;
+            usb_product_id = desc.idProduct;
+            break;
+        }
     }
     if (found) libusb_ref_device(found);
     libusb_free_device_list(list, 1);
