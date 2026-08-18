@@ -33,8 +33,13 @@ struct BTFDLibrary
 
 /* Global interfaces */
 struct ExecIFace       *IExec;
+#ifdef NEWLIB
 struct Library         *NewlibBase;
 struct Interface       *INewlib;
+#else
+struct Library         *Clib4Base;
+struct Interface       *IClib4;
+#endif
 struct Library         *UtilityBase;
 struct UtilityIFace    *IUtility;
 struct USBResourceIFace *IUSBResource;
@@ -99,10 +104,17 @@ static BPTR libExpunge(struct LibraryManagerInterface *Self)
             IUtility = NULL;
         }
 
+#ifdef NEWLIB
         IExec->DropInterface(INewlib);
         INewlib = NULL;
         IExec->CloseLibrary(NewlibBase);
         NewlibBase = NULL;
+#else
+        IExec->DropInterface(IClib4);
+        IClib4 = NULL;
+        IExec->CloseLibrary(Clib4Base);
+        Clib4Base = NULL;
+#endif
 
         IExec->Remove((struct Node *)libBase);
         IExec->DeleteLibrary(&libBase->LibNode);
@@ -120,12 +132,20 @@ static struct Library *libInit(struct BTFDLibrary *libBase, BPTR seglist, struct
 {
     IExec = (struct ExecIFace *)exec;
 
+#ifdef NEWLIB
     NewlibBase = IExec->OpenLibrary("newlib.library", 53);
     if (NewlibBase)
         INewlib = IExec->GetInterface(NewlibBase, "main", 1, NULL);
 
     if (INewlib == NULL)
         return NULL;
+#else
+    Clib4Base = IExec->OpenLibrary("clib4.library", 2);
+    if (Clib4Base)
+        IClib4 = IExec->GetInterface(Clib4Base, "main", 1, NULL);
+    if (IClib4 == NULL)
+        return NULL;
+#endif
 
     libBase->LibNode.lib_Node.ln_Type = NT_LIBRARY;
     libBase->LibNode.lib_Node.ln_Pri  = 0;
@@ -171,10 +191,17 @@ fail:
         IUtility = NULL;
     }
 
+#ifdef NEWLIB
     IExec->DropInterface(INewlib);
     INewlib = NULL;
     IExec->CloseLibrary(NewlibBase);
     NewlibBase = NULL;
+#else
+    IExec->DropInterface(IClib4);
+    IClib4 = NULL;
+    IExec->CloseLibrary(Clib4Base);
+    Clib4Base = NULL;
+#endif
 
     return NULL;
 }
