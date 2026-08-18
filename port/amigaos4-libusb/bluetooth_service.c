@@ -66,6 +66,20 @@ typedef struct {
 /* how long to wait for an outgoing connection before giving up */
 #define CONNECTION_TIMEOUT_MS 10000
 
+/*
+ * Classic gets a little longer to establish itself, and far longer once a
+ * person is actually involved.
+ *
+ * The distinction matters both ways: pairing a keyboard means reading six
+ * digits, typing them and pressing Enter, which ten seconds does not cover -
+ * but applying that patience from the start would let one keyboard that is
+ * simply not in pairing mode block every other device for a whole minute,
+ * since only one connection attempt runs at a time. So start short, and extend
+ * the timer when a pairing event proves someone is at the keyboard.
+ */
+#define CONNECTION_TIMEOUT_CLASSIC_MS 15000
+#define CONNECTION_TIMEOUT_PAIRING_MS 60000
+
 typedef struct {
     BTDeviceInfo                  info;
     hci_con_handle_t              con_handle;
@@ -208,6 +222,7 @@ static bt_result_t   device_connect(bt_device_t * device);
 static void          scan_start(bool autoconnect);
 static void          scan_resume_if_idle(void);
 static void          devices_store(void);
+static void          connection_timeout_handler(btstack_timer_source_t * ts);
 
 /*
  * After a failed attempt, go back to scanning. Known devices reconnect when
@@ -218,6 +233,20 @@ static void          devices_store(void);
 static void connection_retry_timeout(btstack_timer_source_t * ts){
     UNUSED(ts);
     scan_start(true);
+}
+
+/*
+ * A pairing event arrived for the device we are connecting to: someone is
+ * dealing with it, so stop counting against the connection timeout.
+ */
+static void connection_extend_for_pairing(const bd_addr_t addr){
+    if (pending_device == NULL) return;
+    if (memcmp(pending_device->info.bd_addr, addr, 6) != 0) return;
+    if (connection_cancel_pending_for != NULL) return;   /* already giving up */
+    btstack_run_loop_remove_timer(&connection_timer);
+    btstack_run_loop_set_timer_handler(&connection_timer, &connection_timeout_handler);
+    btstack_run_loop_set_timer(&connection_timer, CONNECTION_TIMEOUT_PAIRING_MS);
+    btstack_run_loop_add_timer(&connection_timer);
 }
 
 static void connection_retry_later(void){
@@ -243,6 +272,29 @@ static void connection_timeout_handler(btstack_timer_source_t * ts){
         service_log("service: no response cancelling connection to %s, giving up\n",
                     bd_addr_to_str(pending_device->info.bd_addr));
         device_set_state(pending_device, BT_DEVICE_STATE_BONDED);
+        pending_device = NULL;
+        connection_cancel_pending_for = NULL;
+        connection_retry_later();
+        return;
+    }
+
+    /*
+     * Classic ends here and now.
+     *
+     * gap_connect_cancel() only knows about LE connections, and no
+     * GAP_SUBEVENT_LE_CONNECTION_COMPLETE will ever arrive for a Classic one -
+     * so the wait-for-the-outcome path below would sit through its watchdog and
+     * only then give up, keeping pending_device set the whole time. That is why
+     * a keyboard that failed to connect once was never tried again: every later
+     * inquiry result found an attempt still "in progress".
+     */
+    if (pending_device->info.addr_type == 0xff){
+        service_log("service: connection to %s timed out (classic)\n",
+                    bd_addr_to_str(pending_device->info.bd_addr));
+        if ((pending_device->handler != NULL) && (pending_device->handler->disconnect != NULL)){
+            pending_device->handler->disconnect(pending_device->con_handle);
+        }
+        device_set_state(pending_device, BT_DEVICE_STATE_FOUND);
         pending_device = NULL;
         connection_cancel_pending_for = NULL;
         connection_retry_later();
@@ -311,7 +363,9 @@ static bt_result_t device_connect(bt_device_t * device){
     device_set_state(device, BT_DEVICE_STATE_CONNECTING);
 
     btstack_run_loop_set_timer_handler(&connection_timer, &connection_timeout_handler);
-    btstack_run_loop_set_timer(&connection_timer, CONNECTION_TIMEOUT_MS);
+    btstack_run_loop_set_timer(&connection_timer, (device->info.addr_type == 0xff)
+                                                  ? CONNECTION_TIMEOUT_CLASSIC_MS
+                                                  : CONNECTION_TIMEOUT_MS);
     btstack_run_loop_add_timer(&connection_timer);
 
     /*
@@ -665,7 +719,30 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                                    little_endian_read_32(packet, 8));
             service_log("service: pairing with %s, numeric value %"PRIu32"\n",
                         bd_addr_to_str(addr), little_endian_read_32(packet, 8));
+            connection_extend_for_pairing(addr);
             gap_ssp_confirmation_response(addr);
+            break;
+
+        case HCI_EVENT_USER_PASSKEY_NOTIFICATION:
+            /* the number the user has to type on the keyboard being paired */
+            hci_event_user_passkey_notification_get_bd_addr(packet, addr);
+            device = device_for_addr(addr);
+            bt_service_port_notify(BTEVENT_PAIRING_REQUEST, device ? &device->info : NULL,
+                                   hci_event_user_passkey_notification_get_numeric_value(packet));
+            service_log("service: type %06"PRIu32" on %s and press Enter\n",
+                        hci_event_user_passkey_notification_get_numeric_value(packet),
+                        bd_addr_to_str(addr));
+            connection_extend_for_pairing(addr);
+            break;
+
+        case HCI_EVENT_USER_PASSKEY_REQUEST:
+            /* the other side wants *us* to type a passkey it is displaying. We
+             * have nowhere to read one from, so refuse rather than leave the
+             * device waiting for something that will never come. */
+            hci_event_user_passkey_request_get_bd_addr(packet, addr);
+            service_log("service: %s wants a passkey typed here, which we cannot do\n",
+                        bd_addr_to_str(addr));
+            gap_ssp_passkey_negative(addr);
             break;
 
         case HCI_EVENT_PIN_CODE_REQUEST:
@@ -1027,6 +1104,18 @@ int btstack_main(int argc, const char * argv[]){
     gap_set_default_link_policy_settings(LM_LINK_POLICY_ENABLE_SNIFF_MODE | LM_LINK_POLICY_ENABLE_ROLE_SWITCH);
     hci_set_master_slave_policy(HCI_ROLE_MASTER);
     gap_discoverable_control(1);
+
+    /*
+     * Say we have a display, which for pairing purposes we do - the console.
+     *
+     * BTstack defaults to NO_INPUT_NO_OUTPUT, and against a keyboard (whose own
+     * capability is KeyboardOnly) that picks Just Works. A keyboard is an input
+     * device by definition and generally insists on Passkey Entry instead,
+     * which is why pairing got as far as a confirmation request and then simply
+     * stopped. DISPLAY_ONLY gives the expected model: we show a number, the
+     * user types it on the keyboard and presses Enter.
+     */
+    gap_ssp_set_io_capability(SSP_IO_CAPABILITY_DISPLAY_ONLY);
 
     /* no ATT server: we are a central, and running one opens a re-entrancy in
      * att_server that recurses until the stack overflows. See bthid.c. */
