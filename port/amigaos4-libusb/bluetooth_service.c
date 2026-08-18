@@ -30,6 +30,7 @@
  */
 
 #include <inttypes.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -101,6 +102,40 @@ static btstack_packet_callback_registration_t sm_event_callback_registration;
 static btstack_data_source_t input_data_source;
 
 static bool verbose;
+
+/* true as soon as a handler is driving a device, i.e. we may be injecting
+ * input events - see service_log() */
+static bool injecting_input;
+
+/*
+ * Progress messages go to the console until a device is in use, and to the
+ * serial debug output from then on.
+ *
+ * The reason for serial is real: once a handler is driving a device we may be
+ * injecting input events, and Intuition can be blocked waiting for exactly
+ * those while it drags or sizes a window. printf() goes through the console
+ * handler, which needs Intuition, so printing there deadlocks the machine.
+ * Before that point nothing is being injected and the console is safe - and
+ * being able to watch the service come up without a serial cable is worth a
+ * great deal when something does not work.
+ *
+ * The switch is one way on purpose: after a device has disconnected a
+ * reconnection can happen at any moment, so going back to the console would
+ * reopen the very window this avoids.
+ */
+static void service_log(const char * format, ...){
+    char buffer[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    if (injecting_input){
+        DebugPrintF("%s", buffer);
+    } else {
+        printf("%s", buffer);
+        fflush(stdout);
+    }
+}
 
 /* require LE Secure Connections, refusing devices that only do legacy pairing */
 static bool secure_connections_only;
@@ -190,7 +225,7 @@ static void connection_timeout_handler(btstack_timer_source_t * ts){
          * is set, so waiting forever here would wedge every future reconnect
          * on one unresponsive attempt. Give up on it and move on instead.
          */
-        DebugPrintF("service: no response cancelling connection to %s, giving up\n",
+        service_log("service: no response cancelling connection to %s, giving up\n",
                     bd_addr_to_str(pending_device->info.bd_addr));
         device_set_state(pending_device, BT_DEVICE_STATE_BONDED);
         pending_device = NULL;
@@ -199,7 +234,7 @@ static void connection_timeout_handler(btstack_timer_source_t * ts){
         return;
     }
 
-    DebugPrintF("service: connection to %s timed out, cancelling\n", bd_addr_to_str(pending_device->info.bd_addr));
+    service_log("service: connection to %s timed out, cancelling\n", bd_addr_to_str(pending_device->info.bd_addr));
     gap_connect_cancel();
 
     /*
@@ -275,7 +310,7 @@ static void device_attach_handler(bt_device_t * device){
 
     uint8_t status = device->handler->connect(device->con_handle);
     if (status != ERROR_CODE_SUCCESS){
-        DebugPrintF("service: handler '%s' refused %s, status 0x%02x\n",
+        service_log("service: handler '%s' refused %s, status 0x%02x\n",
                     device->handler->name, bd_addr_to_str(device->info.bd_addr), status);
         device->handler = NULL;
         device->info.handler[0] = 0;
@@ -284,7 +319,7 @@ static void device_attach_handler(bt_device_t * device){
 
     /* the handler reports back through handler_status() once it really has the
      * device - discovering the HID services takes a few round trips */
-    DebugPrintF("service: handler '%s' taking %s\n",
+    service_log("service: handler '%s' taking %s\n",
                 device->handler->name, bd_addr_to_str(device->info.bd_addr));
 }
 
@@ -296,8 +331,11 @@ static void handler_status(hci_con_handle_t con_handle, bool in_use, uint8_t sta
     if (in_use){
         btstack_strcpy(device->info.handler, sizeof(device->info.handler), device->handler->name);
         device_set_state(device, BT_DEVICE_STATE_IN_USE);
-        DebugPrintF("service: %s in use by handler '%s'\n",
+        service_log("service: %s in use by handler '%s'\n",
                     bd_addr_to_str(device->info.bd_addr), device->info.handler);
+        /* from here on a handler is driving a device, so console printing is no
+         * longer safe - see service_log() */
+        injecting_input = true;
         /* keep looking: a mouse being in use says nothing about the keyboard */
         scan_resume_if_idle();
         return;
@@ -305,7 +343,7 @@ static void handler_status(hci_con_handle_t con_handle, bool in_use, uint8_t sta
 
     device->info.handler[0] = 0;
     if (status != ERROR_CODE_SUCCESS){
-        DebugPrintF("service: handler failed on %s, status 0x%02x\n",
+        service_log("service: handler failed on %s, status 0x%02x\n",
                     bd_addr_to_str(device->info.bd_addr), status);
         device->handler = NULL;
         gap_disconnect(con_handle);
@@ -333,7 +371,7 @@ static void devices_store(void){
 
     tlv_impl->store_tag(tlv_context, TLV_TAG_DEVICES, (const uint8_t *) stored,
                         count * sizeof(bt_stored_device_t));
-    DebugPrintF("service: %u known device(s) stored\n", count);
+    service_log("service: %u known device(s) stored\n", count);
 }
 
 static uint8_t devices_load(void){
@@ -353,7 +391,7 @@ static uint8_t devices_load(void){
         device->info.state  = BT_DEVICE_STATE_BONDED;
         device->info.kind   = (bt_device_kind_t) stored[i].kind;
         btstack_strcpy(device->info.name, sizeof(device->info.name), stored[i].name);
-        DebugPrintF("service: known device %s '%s'\n",
+        service_log("service: known device %s '%s'\n",
                     bd_addr_to_str(device->info.bd_addr), device->info.name);
     }
     return count;
@@ -391,7 +429,7 @@ static void scan_start(bool autoconnect){
     gap_start_scan();
     scanning = true;
     bt_service_port_notify(BTEVENT_SCAN_STARTED, NULL, 0);
-    DebugPrintF("service: scanning%s\n", autoconnect ? " (connecting to what we can drive)" : "");
+    service_log("service: scanning%s\n", autoconnect ? " (connecting to what we can drive)" : "");
 }
 
 /*
@@ -429,7 +467,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                 case HCI_STATE_WORKING:
                     controller_ready = true;
                     bt_service_port_notify(BTEVENT_CONTROLLER_READY, NULL, 0);
-                    DebugPrintF("service: controller ready\n");
+                    service_log("service: controller ready\n");
                     service_start_working();
                     break;
                 case HCI_STATE_OFF:
@@ -478,7 +516,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             /* every advertisement, so "we never see it" can be told apart from
              * "we see it and reject it" without guessing */
             if (verbose){
-                DebugPrintF("service: adv from %s, %u bytes of data, rssi %d\n",
+                service_log("service: adv from %s, %u bytes of data, rssi %d\n",
                             bd_addr_to_str(addr), ad_len, rssi);
             }
 
@@ -514,7 +552,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             }
 
             if (is_new){
-                DebugPrintF("service: found %s '%s' rssi %d%s\n", bd_addr_to_str(addr),
+                service_log("service: found %s '%s' rssi %d%s\n", bd_addr_to_str(addr),
                             device->info.name, rssi, handler ? " (supported)" : "");
                 bt_service_port_notify(BTEVENT_DEVICE_FOUND, &device->info, 0);
             }
@@ -524,14 +562,14 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
              * over and over on a device that was simply switched off. */
             if (device->autoconnect && (device->con_handle == HCI_CON_HANDLE_INVALID) &&
                 (pending_device == NULL) && !shutdown_requested){
-                DebugPrintF("service: known device %s is advertising, reconnecting\n", bd_addr_to_str(addr));
+                service_log("service: known device %s is advertising, reconnecting\n", bd_addr_to_str(addr));
                 device_connect(device);
                 break;
             }
 
             /* connect what we can actually drive, when scanning by ourselves */
             if (autoconnect_on_find && (handler != NULL) && (pending_device == NULL)){
-                DebugPrintF("service: connecting to %s\n", bd_addr_to_str(addr));
+                service_log("service: connecting to %s\n", bd_addr_to_str(addr));
                 device_connect(device);
             }
             break;
@@ -553,7 +591,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
              * connection that did not exist.
              */
             if (gap_subevent_le_connection_complete_get_status(packet) != ERROR_CODE_SUCCESS){
-                DebugPrintF("service: connection to %s failed, status 0x%02x\n",
+                service_log("service: connection to %s failed, status 0x%02x\n",
                             bd_addr_to_str(pending_device->info.bd_addr),
                             gap_subevent_le_connection_complete_get_status(packet));
                 device_set_state(pending_device, BT_DEVICE_STATE_BONDED);
@@ -564,7 +602,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 
             pending_device->con_handle = gap_subevent_le_connection_complete_get_connection_handle(packet);
             device_set_state(pending_device, BT_DEVICE_STATE_CONNECTED);
-            DebugPrintF("service: connected to %s\n", bd_addr_to_str(pending_device->info.bd_addr));
+            service_log("service: connected to %s\n", bd_addr_to_str(pending_device->info.bd_addr));
 
             /* encrypt before using the device: a HID device will not deliver
              * reports otherwise, and the keys are what makes it reconnect */
@@ -582,7 +620,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             device->con_handle = HCI_CON_HANDLE_INVALID;
             device->info.handler[0] = 0;
             device_set_state(device, BT_DEVICE_STATE_BONDED);
-            DebugPrintF("service: %s disconnected\n", bd_addr_to_str(device->info.bd_addr));
+            service_log("service: %s disconnected\n", bd_addr_to_str(device->info.bd_addr));
 
             /* a device we are meant to use reconnects when it advertises
              * again - dialling it now would just time out if it went to
@@ -629,7 +667,7 @@ static void sm_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *pa
             if (sm_event_pairing_complete_get_status(packet) == ERROR_CODE_SUCCESS){
                 encrypted = true;
             } else {
-                DebugPrintF("service: pairing failed, status 0x%02x reason 0x%02x\n",
+                service_log("service: pairing failed, status 0x%02x reason 0x%02x\n",
                             sm_event_pairing_complete_get_status(packet),
                             sm_event_pairing_complete_get_reason(packet));
                 gap_disconnect(con_handle);
