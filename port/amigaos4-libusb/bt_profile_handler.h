@@ -57,6 +57,26 @@ typedef struct {
 
     /** @brief Stop using the device; also called when it just disappeared */
     void (*disconnect)(hci_con_handle_t con_handle);
+
+    /*
+     * Bluetooth Classic. A Classic device does not advertise, so probe() can
+     * never see it: it is found by inquiry and identified by its Class of
+     * Device instead. Both may be NULL in a handler that only does LE.
+     */
+
+    /**
+     * @brief Does this handler want the device, judging by its Class of Device?
+     */
+    bool (*probe_classic)(uint32_t class_of_device);
+
+    /**
+     * @brief Connect to a Classic device by address.
+     *
+     * Unlike connect(), this starts from the address: a Classic profile brings
+     * up its own L2CAP channels, so there is no ACL connection to hand over
+     * beforehand.
+     */
+    uint8_t (*connect_addr)(const bd_addr_t addr);
 } bt_profile_handler_t;
 
 /**
@@ -87,6 +107,11 @@ const bt_profile_handler_t ** bt_profile_handlers(void);
  * @brief First handler claiming a device from its advertisement, NULL if none.
  */
 const bt_profile_handler_t * bt_profile_handler_probe(const uint8_t * ad_data, uint8_t ad_len);
+
+/**
+ * @brief First handler claiming a Classic device by its Class of Device.
+ */
+const bt_profile_handler_t * bt_profile_handler_probe_classic(uint32_t class_of_device);
 
 #if defined __cplusplus
 }

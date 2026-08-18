@@ -92,6 +92,20 @@ static bt_device_t * connection_cancel_pending_for;
  * user is choosing, and connecting behind their back would be rude. */
 static bool autoconnect_on_find;
 
+/*
+ * Classic inquiry runs alongside the LE scan, because the two find completely
+ * different devices: a Classic keyboard never advertises and is invisible to an
+ * LE scan no matter how long it runs, which is exactly how one went missing for
+ * a long time while twenty LE devices were being found around it.
+ *
+ * Unlike scanning, inquiry is not a state one simply leaves on: it runs for a
+ * bounded number of 1.28 s periods and then reports GAP_EVENT_INQUIRY_COMPLETE,
+ * so it is restarted from there for as long as we want to keep looking.
+ */
+#define INQUIRY_DURATION 4   /* 4 * 1.28 s ~ 5 s per round */
+static bool inquiring;
+static bool inquiry_wanted;
+
 static const btstack_tlv_t * tlv_impl;
 static void *                tlv_context;
 
@@ -193,6 +207,7 @@ static void device_set_state(bt_device_t * device, bt_device_state_t state){
 static bt_result_t   device_connect(bt_device_t * device);
 static void          scan_start(bool autoconnect);
 static void          scan_resume_if_idle(void);
+static void          devices_store(void);
 
 /*
  * After a failed attempt, go back to scanning. Known devices reconnect when
@@ -299,6 +314,34 @@ static bt_result_t device_connect(bt_device_t * device){
     btstack_run_loop_set_timer(&connection_timer, CONNECTION_TIMEOUT_MS);
     btstack_run_loop_add_timer(&connection_timer);
 
+    /*
+     * Classic goes a different way round. On LE we bring up the connection
+     * ourselves and hand the finished thing to a handler; a Classic profile
+     * opens its own L2CAP channels, so the handler is given the address and
+     * does the connecting - there is no ACL connection to hand over yet. The
+     * handler then reports back through handler_status() exactly as the LE one
+     * does, so everything downstream stays the same.
+     */
+    if (device->info.addr_type == 0xff){
+        if ((device->handler == NULL) || (device->handler->connect_addr == NULL)){
+            device_set_state(device, BT_DEVICE_STATE_FOUND);
+            pending_device = NULL;
+            btstack_run_loop_remove_timer(&connection_timer);
+            return BT_RESULT_UNSUPPORTED;
+        }
+        uint8_t status = device->handler->connect_addr(device->info.bd_addr);
+        if (status != ERROR_CODE_SUCCESS){
+            service_log("service: classic connect to %s refused, status 0x%02x\n",
+                        bd_addr_to_str(device->info.bd_addr), status);
+            device_set_state(device, BT_DEVICE_STATE_BONDED);
+            pending_device = NULL;
+            btstack_run_loop_remove_timer(&connection_timer);
+            connection_retry_later();
+            return BT_RESULT_FAILED;
+        }
+        return BT_RESULT_OK;
+    }
+
     gap_connect(device->info.bd_addr, (bd_addr_type_t) device->info.addr_type);
     return BT_RESULT_OK;
 }
@@ -329,8 +372,17 @@ static void handler_status(hci_con_handle_t con_handle, bool in_use, uint8_t sta
     if (device == NULL) return;
 
     if (in_use){
+        /* a Classic device connects through its handler, so this is where its
+         * attempt concludes - the LE path has already cleared these */
+        if (pending_device == device){
+            pending_device = NULL;
+            btstack_run_loop_remove_timer(&connection_timer);
+        }
+        device->con_handle  = con_handle;
+        device->autoconnect = true;
         btstack_strcpy(device->info.handler, sizeof(device->info.handler), device->handler->name);
         device_set_state(device, BT_DEVICE_STATE_IN_USE);
+        devices_store();
         service_log("service: %s in use by handler '%s'\n",
                     bd_addr_to_str(device->info.bd_addr), device->info.handler);
         /* from here on a handler is driving a device, so console printing is no
@@ -346,6 +398,11 @@ static void handler_status(hci_con_handle_t con_handle, bool in_use, uint8_t sta
         service_log("service: handler failed on %s, status 0x%02x\n",
                     bd_addr_to_str(device->info.bd_addr), status);
         device->handler = NULL;
+        if (pending_device == device){
+            pending_device = NULL;
+            btstack_run_loop_remove_timer(&connection_timer);
+            connection_retry_later();
+        }
         gap_disconnect(con_handle);
     }
 }
@@ -412,6 +469,22 @@ static void scan_resume_if_idle(void){
     scan_start(true);
 }
 
+static void inquiry_start(void){
+    inquiry_wanted = true;
+    if (inquiring) return;
+    if (controller_ready == false) return;
+    if (gap_inquiry_start(INQUIRY_DURATION) == ERROR_CODE_SUCCESS){
+        inquiring = true;
+    }
+}
+
+static void inquiry_stop(void){
+    inquiry_wanted = false;
+    if (!inquiring) return;
+    gap_inquiry_stop();
+    /* inquiring is cleared by GAP_EVENT_INQUIRY_COMPLETE, which still arrives */
+}
+
 static void scan_start(bool autoconnect){
     if (scanning) return;
     autoconnect_on_find = autoconnect;
@@ -430,6 +503,9 @@ static void scan_start(bool autoconnect){
     scanning = true;
     bt_service_port_notify(BTEVENT_SCAN_STARTED, NULL, 0);
     service_log("service: scanning%s\n", autoconnect ? " (connecting to what we can drive)" : "");
+
+    /* Classic devices are found by inquiry, never by this scan */
+    inquiry_start();
 }
 
 /*
@@ -575,6 +651,85 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             break;
         }
 
+        case HCI_EVENT_USER_CONFIRMATION_REQUEST:
+            /*
+             * Just Works pairing on Classic. Accepted automatically for the
+             * same reason as on LE: there is no GUI to ask yet, and refusing
+             * would make the hardware people own unusable. The passkey is
+             * reported to subscribers so the GUI can show and confirm it once
+             * it exists - that is where this decision belongs.
+             */
+            hci_event_user_confirmation_request_get_bd_addr(packet, addr);
+            device = device_for_addr(addr);
+            bt_service_port_notify(BTEVENT_PAIRING_REQUEST, device ? &device->info : NULL,
+                                   little_endian_read_32(packet, 8));
+            service_log("service: pairing with %s, numeric value %"PRIu32"\n",
+                        bd_addr_to_str(addr), little_endian_read_32(packet, 8));
+            gap_ssp_confirmation_response(addr);
+            break;
+
+        case HCI_EVENT_PIN_CODE_REQUEST:
+            /* pre-2.1 legacy pairing, which needs a PIN we have no way to ask
+             * for; refuse it rather than pretend */
+            hci_event_pin_code_request_get_bd_addr(packet, addr);
+            service_log("service: %s wants a PIN code (legacy pairing), refusing\n",
+                        bd_addr_to_str(addr));
+            gap_pin_code_negative(addr);
+            break;
+
+        case GAP_EVENT_INQUIRY_RESULT: {
+            gap_event_inquiry_result_get_bd_addr(packet, addr);
+            uint32_t cod = gap_event_inquiry_result_get_class_of_device(packet);
+
+            bool is_new = device_for_addr(addr) == NULL;
+            /* 0xff marks a Classic address: it has no LE address type, and the
+             * distinction matters when connecting and when storing it */
+            device = device_add(addr, 0xff);
+            if (device == NULL) break;
+
+            device->info.class_of_device = cod;
+            device->info.rssi = gap_event_inquiry_result_get_rssi(packet);
+
+            if (gap_event_inquiry_result_get_name_available(packet)){
+                uint8_t name_len = gap_event_inquiry_result_get_name_len(packet);
+                if (name_len >= sizeof(device->info.name)) name_len = sizeof(device->info.name) - 1;
+                memcpy(device->info.name, gap_event_inquiry_result_get_name(packet), name_len);
+                device->info.name[name_len] = 0;
+            }
+
+            const bt_profile_handler_t * handler = bt_profile_handler_probe_classic(cod);
+            if (handler != NULL){
+                device->handler   = handler;
+                device->info.kind = handler->kind;
+            }
+
+            if (is_new){
+                service_log("service: inquiry found %s '%s' COD 0x%06x rssi %d%s\n",
+                            bd_addr_to_str(addr), device->info.name, (unsigned) cod,
+                            device->info.rssi, handler ? " (supported)" : "");
+                bt_service_port_notify(BTEVENT_DEVICE_FOUND, &device->info, 0);
+            }
+
+            /* known Classic device seen again, or a new one we can drive */
+            if ((pending_device == NULL) && !shutdown_requested && (handler != NULL) &&
+                (device->con_handle == HCI_CON_HANDLE_INVALID) &&
+                (device->autoconnect || autoconnect_on_find)){
+                service_log("service: connecting to %s (classic)\n", bd_addr_to_str(addr));
+                device_connect(device);
+            }
+            break;
+        }
+
+        case GAP_EVENT_INQUIRY_COMPLETE:
+            inquiring = false;
+            /* inquiry is bounded, so keep it going for as long as we are
+             * looking - otherwise a Classic device switched on a minute later
+             * would never be found */
+            if (inquiry_wanted && !shutdown_requested){
+                inquiry_start();
+            }
+            break;
+
         case HCI_EVENT_META_GAP:
             if (hci_event_gap_meta_get_subevent_code(packet) != GAP_SUBEVENT_LE_CONNECTION_COMPLETE) break;
             btstack_run_loop_remove_timer(&connection_timer);
@@ -622,8 +777,9 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             device_set_state(device, BT_DEVICE_STATE_BONDED);
             service_log("service: %s disconnected\n", bd_addr_to_str(device->info.bd_addr));
 
-            /* a device we are meant to use reconnects when it advertises
-             * again - dialling it now would just time out if it went to
+            /* a device we are meant to use reconnects when we see it again -
+             * advertising on LE, inquiry on Classic, both of which scan_start()
+             * turns on. Dialling it now would just time out if it went to
              * sleep, blocking everything else meanwhile */
             if (device->autoconnect && !shutdown_requested){
                 scan_start(true);
@@ -728,6 +884,7 @@ static bt_result_t handle_command(BTServiceMsg * msg){
             return BT_RESULT_OK;
 
         case BTCMD_SCAN_STOP:
+            inquiry_stop();
             if (scanning){
                 gap_stop_scan();
                 scanning = false;
@@ -859,6 +1016,17 @@ int btstack_main(int argc, const char * argv[]){
     }
 
     gatt_client_init();
+
+    /*
+     * Classic setup. A HID keyboard expects to be able to go into sniff mode
+     * and to ask for a role switch, and we want to end up master so the device
+     * follows our timing. Being discoverable lets a keyboard that was paired
+     * before start the connection itself, which is how they reconnect after
+     * being switched on.
+     */
+    gap_set_default_link_policy_settings(LM_LINK_POLICY_ENABLE_SNIFF_MODE | LM_LINK_POLICY_ENABLE_ROLE_SWITCH);
+    hci_set_master_slave_policy(HCI_ROLE_MASTER);
+    gap_discoverable_control(1);
 
     /* no ATT server: we are a central, and running one opens a re-entrancy in
      * att_server that recurses until the stack overflows. See bthid.c. */

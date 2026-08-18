@@ -16,9 +16,11 @@
 
 #include "bt_profile_handler.h"
 #include "bt_handler_hid.h"
+#include "bt_handler_hid_classic.h"
 
 static const bt_profile_handler_t * handlers[] = {
     &bt_handler_hid,
+    &bt_handler_hid_classic,
     NULL
 };
 
@@ -42,6 +44,15 @@ const bt_profile_handler_t * bt_profile_handler_probe(const uint8_t * ad_data, u
     for (i = 0; handlers[i] != NULL; i++){
         if (handlers[i]->probe == NULL) continue;
         if (handlers[i]->probe(ad_data, ad_len)) return handlers[i];
+    }
+    return NULL;
+}
+
+const bt_profile_handler_t * bt_profile_handler_probe_classic(uint32_t class_of_device){
+    uint8_t i;
+    for (i = 0; handlers[i] != NULL; i++){
+        if (handlers[i]->probe_classic == NULL) continue;
+        if (handlers[i]->probe_classic(class_of_device)) return handlers[i];
     }
     return NULL;
 }

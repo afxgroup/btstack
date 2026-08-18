@@ -121,6 +121,18 @@ Intuition derives double click from the interval between button events - and
 the `IEQUALIFIER_LEFTBUTTON`/`RBUTTON`/`MIDBUTTON` bits for the buttons
 currently held, which is how click and drag state is tracked.
 
+Both Bluetooth LE and Classic are handled, and they are genuinely different
+searches: an LE device is found by scanning for its advertisements, a Classic
+one only by inquiry. A Classic keyboard never advertises, so it stays invisible
+to an LE scan however long it runs - which is why the service does both at once
+(`gap_start_scan()` plus a `gap_inquiry_start()` that restarts itself, since
+inquiry is bounded rather than a state one leaves on). LE devices are matched on
+their advertisement, Classic ones on their Class of Device.
+
+Everything downstream is shared: `bt_hid_report.c` decodes the report and
+injects the events, and neither it nor the keymap knows whether the report came
+over GATT from an LE mouse or over L2CAP from a Classic keyboard.
+
 Keyboards work too. HID usages are mapped to Amiga raw key codes in
 `bt_hid_keymap.h`, positionally: usage 0x14 is "the key where Q is on a US
 keyboard" and RAWKEY 0x10 is that same physical key, so what it produces is
