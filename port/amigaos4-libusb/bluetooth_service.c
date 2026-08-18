@@ -99,6 +99,9 @@ static btstack_data_source_t input_data_source;
 
 static bool verbose;
 
+/* require LE Secure Connections, refusing devices that only do legacy pairing */
+static bool secure_connections_only;
+
 /* -------------------------------------------------------------------------- */
 /* device table                                                               */
 
@@ -650,6 +653,9 @@ int btstack_main(int argc, const char * argv[]){
         if ((strcmp(argv[i], "-v") == 0) || (strcmp(argv[i], "--verbose") == 0)){
             verbose = true;
         }
+        if (strcmp(argv[i], "--secure-only") == 0){
+            secure_connections_only = true;
+        }
     }
     bt_handler_hid_set_verbose(verbose);
 
@@ -674,6 +680,26 @@ int btstack_main(int argc, const char * argv[]){
     sm_init();
     sm_set_io_capabilities(IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
     sm_set_authentication_requirements(SM_AUTHREQ_SECURE_CONNECTION | SM_AUTHREQ_BONDING);
+
+    /*
+     * Accept LE Legacy Pairing.
+     *
+     * sm_init() turns on LE Secure Connections *Only* mode whenever
+     * ENABLE_LE_SECURE_CONNECTIONS is configured, and then every device that
+     * does not do Secure Connections - which is most mice, and every older
+     * peripheral - is refused with SM_REASON_AUTHENTHICATION_REQUIREMENTS.
+     *
+     * TODO: this is a policy decision that belongs to the user, and once the
+     * GUI exists it should be one: refuse by default and let them accept a
+     * legacy device knowingly, per device, rather than lowering the bar for
+     * everything. Until there is a way to ask, refusing would simply make the
+     * hardware people own unusable. Start with --secure-only to try the strict
+     * behaviour.
+     */
+    if (secure_connections_only == false){
+        sm_set_secure_connections_only_mode(false);
+        printf("Accepting LE Legacy Pairing (start with --secure-only to require Secure Connections)\n");
+    }
 
     gatt_client_init();
 
