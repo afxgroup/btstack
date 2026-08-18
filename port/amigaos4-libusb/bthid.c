@@ -135,8 +135,11 @@ static void input_poll_ds(btstack_data_source_t * ds, btstack_data_source_callba
 static void hog_start_scan(void){
     bthid_log("Scanning for LE HID devices...\n");
     app_state = W4_HID_DEVICE_FOUND;
-    // Passive scanning, 100% (scan interval = scan window)
-    gap_set_scan_parameters(0, 48, 48);
+    /* Active scanning (1), 100% duty cycle (scan interval = scan window).
+     * Passive would never send SCAN_REQ, so the scan response - where many
+     * keyboards keep their name and service UUIDs - would never arrive, and
+     * the device would be invisible. See bluetooth_service.c. */
+    gap_set_scan_parameters(1, 48, 48);
     gap_start_scan();
 }
 

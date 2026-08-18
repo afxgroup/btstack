@@ -244,13 +244,18 @@ static bt_result_t device_connect(bt_device_t * device){
     if (pending_device != NULL)     return BT_RESULT_BUSY;
     if (device->info.state >= BT_DEVICE_STATE_CONNECTED) return BT_RESULT_OK;
 
-    /* scanning and connecting at the same time is not worth the trouble: the
-     * controller has to interleave them and both get slower */
-    if (scanning){
-        gap_stop_scan();
-        scanning = false;
-        bt_service_port_notify(BTEVENT_SCAN_STOPPED, NULL, 0);
-    }
+    /*
+     * Scanning is deliberately left running.
+     *
+     * BTstack already interleaves the two: hci_run_general_gap_le() pauses the
+     * scan when it has to send LE Create Connection and its "restore state"
+     * phase turns it back on afterwards, tracking what the application asked
+     * for (le_scanning_enabled) apart from what the controller is doing
+     * (le_scanning_active). Calling gap_stop_scan() here clears that intent, so
+     * the scan stayed off after every connection until something happened to
+     * start it again - which is why scanning appeared to stop by itself after a
+     * while, and why a second device could not be found.
+     */
 
     pending_device = device;
     device_set_state(device, BT_DEVICE_STATE_CONNECTING);
@@ -372,7 +377,17 @@ static void scan_resume_if_idle(void){
 static void scan_start(bool autoconnect){
     if (scanning) return;
     autoconnect_on_find = autoconnect;
-    gap_set_scan_parameters(0, 48, 48);
+    /*
+     * Active scanning (1), not passive.
+     *
+     * Passive means never sending SCAN_REQ, so the scan response never arrives -
+     * and that is where a lot of devices put their name and their service
+     * UUIDs, keyboards especially. With passive scanning such a device is
+     * either invisible or shows up nameless and unrecognised, while the same
+     * hardware is found immediately by anything scanning actively, which is
+     * what Linux does by default.
+     */
+    gap_set_scan_parameters(1, 48, 48);
     gap_start_scan();
     scanning = true;
     bt_service_port_notify(BTEVENT_SCAN_STARTED, NULL, 0);
@@ -459,6 +474,13 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             }
 
             if (!scanning) break;
+
+            /* every advertisement, so "we never see it" can be told apart from
+             * "we see it and reject it" without guessing */
+            if (verbose){
+                DebugPrintF("service: adv from %s, %u bytes of data, rssi %d\n",
+                            bd_addr_to_str(addr), ad_len, rssi);
+            }
 
             bool is_new = device_for_addr(addr) == NULL;
             device = device_add(addr, addr_type);
