@@ -163,6 +163,41 @@ static btstack_packet_callback_registration_t hci_event_callback_registration;
 // shutdown
 static bool shutdown_triggered;
 
+// Where the Realtek firmware and config files live.
+//
+// The chipset driver opens them relative to the current directory, which is
+// wherever the user happened to be - for a service started by bt.usbfd that is
+// C:, where they certainly are not. So look for them in the places they belong,
+// in order of how explicit the choice is:
+//
+//   -f FOLDER        the user said so
+//   BT:Firmware      an assign for a self contained installation of the stack
+//   SYS:Firmware/bt  the system firmware drawer, where AmigaOS keeps such files
+//   .                current directory, which is how the demos were used
+static const char * realtek_firmware_folder(void){
+
+    if (firmware_folder_path != NULL) return firmware_folder_path;
+
+    static const char * const candidates[] = { "BT:Firmware", "SYS:Firmware/bt", "." };
+
+    // Probing an assign that is not mounted would pop up a "please insert
+    // volume" requester, which is the last thing a background service should do.
+    APTR old_window = SetProcWindow((APTR) -1);
+
+    const char * folder = ".";
+    uint8_t i;
+    for (i = 0; i < (sizeof(candidates) / sizeof(candidates[0])); i++){
+        BPTR lock = Lock(candidates[i], SHARED_LOCK);
+        if (lock == ZERO) continue;
+        UnLock(lock);
+        folder = candidates[i];
+        break;
+    }
+
+    SetProcWindow(old_window);
+    return folder;
+}
+
 // Make sure the bonding folder exists and return the prefix to use for the TLV
 // file. Falls back to T: rather than failing: better a stack that works and
 // forgets its pairings than one that does not come up at all.
@@ -235,9 +270,10 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
             if (vendor_id == USB_VENDOR_ID_REALTEK) {
                 printf("Realtek Controller - requires firmware and config download\n");
                 printf("Note: files must be uncompressed (no .zst) and named exactly as printed below\n");
-                if (firmware_folder_path != NULL){
-                    btstack_chipset_realtek_set_firmware_folder_path(firmware_folder_path);
-                    btstack_chipset_realtek_set_config_folder_path(firmware_folder_path);
+                {
+                    const char * folder = realtek_firmware_folder();
+                    btstack_chipset_realtek_set_firmware_folder_path(folder);
+                    btstack_chipset_realtek_set_config_folder_path(folder);
                 }
                 btstack_chipset_realtek_set_product_id(product_id);
                 hci_set_chipset(btstack_chipset_realtek_instance());

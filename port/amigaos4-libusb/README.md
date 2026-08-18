@@ -72,8 +72,16 @@ zstd -d rtl8761bu_fw.bin.zst -o rtl8761bu_fw
 zstd -d rtl8761bu_config.bin.zst -o rtl8761bu_config
 ```
 
-By default they are searched for in the current directory; use `-f FOLDER`
-to point to another folder. The exact paths used are printed at startup
+They are searched for in this order, which matters for a service started by
+bt.usbfd - its current directory is `C:`, where they certainly are not:
+
+1. `-f FOLDER`, when the user said so
+2. `BT:Firmware`, an assign for a self contained installation of the stack
+3. `SYS:Firmware/bt`, the system firmware drawer where AmigaOS keeps such files
+4. the current directory, which is how the demos were used
+
+Installing them in `SYS:Firmware/bt` is the recommended choice: it needs no
+assign and works whoever starts the service. The exact paths used are printed at startup
 ("Realtek: Using firmware ... and config ...").
 
 ## bthid - use a Bluetooth LE mouse as the system mouse
