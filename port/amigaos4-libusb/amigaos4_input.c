@@ -35,6 +35,7 @@
 #include <exec/io.h>
 #include <devices/input.h>
 #include <devices/inputevent.h>
+#include <libraries/keymap.h>
 #include <devices/timer.h>
 #include <dos/dos.h>
 #include <proto/exec.h>
@@ -111,6 +112,16 @@ typedef struct {
     int16_t  x;
     int16_t  y;
 } input_queued_event_t;
+
+/*
+ * The two previously pressed keys travel with every key event: that is how
+ * keymap.library composes dead keys, so without them accented characters do not
+ * work on the layouts that need them.
+ */
+static uint16_t key_prev1_code;
+static uint16_t key_prev1_qual;
+static uint16_t key_prev2_code;
+static uint16_t key_prev2_qual;
 
 static input_queued_event_t input_queue[INPUT_QUEUE_SIZE];
 static uint8_t              input_queue_count;
@@ -242,7 +253,29 @@ static bool input_send(uint8_t class, uint16_t code, uint16_t qualifier, int16_t
                         (unsigned int) qualifier);
         }
 
-        slot->req->io_Command = IND_WRITEEVENT;
+        if (class == IECLASS_RAWKEY){
+            slot->event.ie_position.ie_dead.ie_prev1DownCode = (uint8_t) key_prev1_code;
+            slot->event.ie_position.ie_dead.ie_prev1DownQual = (uint8_t) key_prev1_qual;
+            slot->event.ie_position.ie_dead.ie_prev2DownCode = (uint8_t) key_prev2_code;
+            slot->event.ie_position.ie_dead.ie_prev2DownQual = (uint8_t) key_prev2_qual;
+
+            /* only key presses take part in dead key composition */
+            if ((code & IECODE_UP_PREFIX) == 0){
+                key_prev2_code = key_prev1_code;
+                key_prev2_qual = key_prev1_qual;
+                key_prev1_code = code;
+                key_prev1_qual = qualifier;
+            }
+        }
+
+        /*
+         * IND_ADDEVENT, not IND_WRITEEVENT. On OS4 this is what a driver
+         * feeding the input stream uses - the boot mouse, boot keyboard and HID
+         * drivers all do. IND_WRITEEVENT is the OS3 way and runs the event
+         * through the handler chain, which is both slower and the reason a
+         * blocking call there could deadlock against Intuition.
+         */
+        slot->req->io_Command = IND_ADDEVENT;
         slot->req->io_Flags   = 0;
         slot->req->io_Length  = sizeof(struct InputEvent);
         slot->req->io_Data    = &slot->event;
@@ -525,6 +558,21 @@ void amigaos4_input_mouse_buttons(uint8_t buttons){
     }
 
     button_state = buttons;
+}
+
+void amigaos4_input_key(uint16_t rawkey, bool pressed, uint16_t qualifier){
+
+    /*
+     * Codes above 0xFF are IECLASS_EXTENDEDRAWKEY and need an IEExtDeadKey
+     * structure that the public SDK does not declare, so they are dropped. That
+     * range is F13 and up plus the media keys; every key of an ordinary
+     * keyboard fits in IECLASS_RAWKEY.
+     */
+    if (rawkey > 0xFF) return;
+
+    input_write_event(IECLASS_RAWKEY,
+                      rawkey | (pressed ? 0 : IECODE_UP_PREFIX),
+                      qualifier, 0, 0);
 }
 
 void amigaos4_input_mouse_wheel(int16_t horizontal, int16_t vertical){

@@ -121,9 +121,22 @@ Intuition derives double click from the interval between button events - and
 the `IEQUALIFIER_LEFTBUTTON`/`RBUTTON`/`MIDBUTTON` bits for the buttons
 currently held, which is how click and drag state is tracked.
 
-Keyboards are not handled yet. For those, `IECLASS_EXTENDEDRAWKEY` with
-`IESUBCLASS_SET1_RAWKEY` accepts PC Set-1 scancodes, which avoids writing a
-full USB HID to Amiga rawkey mapping table.
+Keyboards work too. HID usages are mapped to Amiga raw key codes in
+`bt_hid_keymap.h`, positionally: usage 0x14 is "the key where Q is on a US
+keyboard" and RAWKEY 0x10 is that same physical key, so what it produces is
+decided by the keymap the user has chosen - an Italian or German layout comes
+out right without anything here knowing about it.
+
+A HID keyboard reports the set of keys held right now, so presses and releases
+are derived by comparing consecutive reports. Modifiers are sent before the
+keys they apply to, and every key event carries the two previously pressed keys
+in `ie_dead`, which is how `keymap.library` composes dead keys - without them
+accented characters do not work.
+
+Events are written with `IND_ADDEVENT`, not `IND_WRITEEVENT`: on AmigaOS 4 that
+is what a driver feeding the input stream uses - the boot mouse, boot keyboard
+and HID drivers all do, and their history files say `IND_WRITEEVENT` is the OS3
+way, needing an input handler.
 
 ## Pairing with devices without LE Secure Connections
 

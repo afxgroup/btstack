@@ -80,6 +80,15 @@ void amigaos4_input_mouse_move(int16_t dx, int16_t dy);
 void amigaos4_input_mouse_buttons(uint8_t buttons);
 
 /**
+ * @brief Report a key, as an Amiga raw key code (see libraries/keymap.h).
+ *
+ * @param rawkey    RAWKEY_*; codes above 0xFF are ignored, see the source
+ * @param pressed   false sends the release
+ * @param qualifier IEQUALIFIER_* for the modifiers held right now
+ */
+void amigaos4_input_key(uint16_t rawkey, bool pressed, uint16_t qualifier);
+
+/**
  * @brief Report wheel movement
  */
 void amigaos4_input_mouse_wheel(int16_t horizontal, int16_t vertical);
