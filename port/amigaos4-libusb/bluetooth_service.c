@@ -82,6 +82,9 @@ static bool     shutdown_requested;
 /* device we are currently connecting to, NULL when idle */
 static bt_device_t * pending_device;
 static btstack_timer_source_t connection_timer;
+/* device we already asked gap_connect_cancel() for, used as a watchdog: see
+ * connection_timeout_handler() */
+static bt_device_t * connection_cancel_pending_for;
 
 /* true while scanning on our own initiative: a device a handler claims is then
  * connected right away. A scan asked for by a client does not do that - the
@@ -156,22 +159,87 @@ static bt_result_t   device_connect(bt_device_t * device);
 static bt_device_t * device_next_to_reconnect(void);
 static void          scan_start(bool autoconnect);
 
-static void connection_timeout_handler(btstack_timer_source_t * ts){
+/*
+ * Try the next known device, or start scanning. Called only from a fresh event
+ * - never from inside the call stack that is unwinding a connection attempt -
+ * see the long comment in connection_timeout_handler() for why that matters.
+ */
+static void connection_retry_timeout(btstack_timer_source_t * ts){
     UNUSED(ts);
-    if (pending_device == NULL) return;
-    DebugPrintF("service: connection to %s timed out\n", bd_addr_to_str(pending_device->info.bd_addr));
-    gap_connect_cancel();
-    device_set_state(pending_device, BT_DEVICE_STATE_BONDED);
-    pending_device = NULL;
-
-    /* a device that is off or out of range must not stop the service from
-     * finding the others */
     bt_device_t * next = device_next_to_reconnect();
     if (next != NULL){
         device_connect(next);
     } else {
         scan_start(true);
     }
+}
+
+static void connection_retry_later(void){
+    btstack_run_loop_set_timer_handler(&connection_timer, &connection_retry_timeout);
+    btstack_run_loop_set_timer(&connection_timer, 500);
+    btstack_run_loop_add_timer(&connection_timer);
+}
+
+static void connection_timeout_handler(btstack_timer_source_t * ts){
+    UNUSED(ts);
+    if (pending_device == NULL) return;
+
+    if (pending_device == connection_cancel_pending_for){
+        /*
+         * We already cancelled this very attempt and re-armed this same timer
+         * as a watchdog - being back here means no GAP_SUBEVENT_LE_CONNECTION_
+         * COMPLETE ever arrived for it. That should not happen (a cancel is
+         * followed by a connection complete event one way or another), but
+         * device_connect() refuses to start anything new while pending_device
+         * is set, so waiting forever here would wedge every future reconnect
+         * on one unresponsive attempt. Give up on it and move on instead.
+         */
+        DebugPrintF("service: no response cancelling connection to %s, giving up\n",
+                    bd_addr_to_str(pending_device->info.bd_addr));
+        device_set_state(pending_device, BT_DEVICE_STATE_BONDED);
+        pending_device = NULL;
+        connection_cancel_pending_for = NULL;
+        connection_retry_later();
+        return;
+    }
+
+    DebugPrintF("service: connection to %s timed out, cancelling\n", bd_addr_to_str(pending_device->info.bd_addr));
+    gap_connect_cancel();
+
+    /*
+     * pending_device is deliberately left set here, not cleared. This used to
+     * clear it and immediately call gap_connect() again on the next device -
+     * but gap_connect_cancel() does not guarantee the attempt is gone by the
+     * time it returns: for a command already sent to the controller, it only
+     * queues the actual "LE Create Connection Cancel" and the real outcome -
+     * cancelled, or the connection completing anyway because it raced the
+     * cancel - always arrives later as GAP_SUBEVENT_LE_CONNECTION_COMPLETE.
+     * Calling gap_connect() again before that, for the very address whose
+     * hci_connection_t is still sitting there mid-cancel, hits
+     * ERROR_CODE_COMMAND_DISALLOWED inside gap_connect() - a return value
+     * nothing here checked - so the retry silently did nothing while the
+     * original attempt was the one still live. When that original attempt's
+     * completion event then arrived, pending_device already pointed at a
+     * *second*, never-actually-sent connect call for the same device, so the
+     * event was accepted as if it belonged to that one: an unchecked status
+     * (see below) meant a cancelled/failed attempt could be logged and treated
+     * as "connected" while nothing was actually connected.
+     *
+     * Only the event handler below now decides what happens next; this
+     * function's only remaining job is to ask for the cancellation and wait,
+     * with the watchdog above as a bound on "wait" actually meaning something.
+     */
+    if (pending_device == NULL){
+        /* the cancel resolved synchronously (device was not sent to the
+         * controller yet) - the event handler below already dealt with it */
+        connection_cancel_pending_for = NULL;
+        return;
+    }
+
+    connection_cancel_pending_for = pending_device;
+    btstack_run_loop_set_timer_handler(&connection_timer, &connection_timeout_handler);
+    btstack_run_loop_set_timer(&connection_timer, 2000);
+    btstack_run_loop_add_timer(&connection_timer);
 }
 
 static bt_result_t device_connect(bt_device_t * device){
@@ -443,7 +511,27 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
         case HCI_EVENT_META_GAP:
             if (hci_event_gap_meta_get_subevent_code(packet) != GAP_SUBEVENT_LE_CONNECTION_COMPLETE) break;
             btstack_run_loop_remove_timer(&connection_timer);
+            connection_cancel_pending_for = NULL;
             if (pending_device == NULL) break;
+
+            /*
+             * This status was never checked before, which is what let a
+             * cancelled or otherwise failed attempt - reported here with a
+             * non-zero status and a connection handle that means nothing on
+             * failure - be logged and treated as a real connection. That is
+             * how the mouse could print "connected to ..." on the console and
+             * never actually move: sm_request_pairing() was then called on a
+             * connection that did not exist.
+             */
+            if (gap_subevent_le_connection_complete_get_status(packet) != ERROR_CODE_SUCCESS){
+                DebugPrintF("service: connection to %s failed, status 0x%02x\n",
+                            bd_addr_to_str(pending_device->info.bd_addr),
+                            gap_subevent_le_connection_complete_get_status(packet));
+                device_set_state(pending_device, BT_DEVICE_STATE_BONDED);
+                pending_device = NULL;
+                connection_retry_later();
+                break;
+            }
 
             pending_device->con_handle = gap_subevent_le_connection_complete_get_connection_handle(packet);
             device_set_state(pending_device, BT_DEVICE_STATE_CONNECTED);
