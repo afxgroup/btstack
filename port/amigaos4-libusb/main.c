@@ -328,7 +328,7 @@ void hal_led_toggle(void){
     printf("LED State %u\n", led_state);
 }
 
-static char short_options[] = "hu:l:rf:p";
+static char short_options[] = "hu:l:rf:pd:";
 
 static struct option long_options[] = {
     {"help",        no_argument,        NULL,   'h'},
@@ -337,6 +337,7 @@ static struct option long_options[] = {
     {"usbpath",    required_argument,  NULL,   'u'},
     {"fwpath",     required_argument,  NULL,   'f'},
     {"legacy-pairing", no_argument,    NULL,   'p'},
+    {"device",     required_argument,  NULL,   'd'},
     {0, 0, 0, 0}
 };
 
@@ -347,6 +348,7 @@ static char *help_options[] = {
     "set USB path, format BUS:PORT-PORT-PORT, e.g. 1:1.2.3 of Bluetooth Controller.",
     "set folder with Realtek firmware/config files, default: current directory.",
     "accept LE Legacy Pairing, for devices without LE Secure Connections.",
+    "use this USB controller, format VID:PID e.g. 3151:3020.",
 };
 
 static char *option_arg_name[] = {
@@ -356,6 +358,7 @@ static char *option_arg_name[] = {
     "USBPATH",
     "FWPATH",
     "",
+    "VID:PID",
 };
 
 static void usage(const char *name){
@@ -405,6 +408,22 @@ int main(int argc, const char * argv[]){
                 break;
             case 'p':
                 allow_legacy_pairing = true;
+                break;
+            case 'd':
+                // A controller that does not declare the standard USB class can
+                // be named here. Needed because the interfaces, where such a
+                // device carries its class, cannot be read before opening it.
+                {
+                    char * end = NULL;
+                    long vid = strtol(optarg, &end, 16);
+                    long pid = (end && (*end == ':')) ? strtol(end + 1, NULL, 16) : -1;
+                    if ((vid <= 0) || (pid < 0)){
+                        printf("ERROR: -d wants VID:PID in hex, e.g. -d 3151:3020\n");
+                        return EXIT_FAILURE;
+                    }
+                    printf("Using USB controller %04x:%04x\n", (unsigned) vid, (unsigned) pid);
+                    hci_transport_usb_add_device((uint16_t) vid, (uint16_t) pid);
+                }
                 break;
             case 'h':
             default:
