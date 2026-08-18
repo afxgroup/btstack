@@ -42,6 +42,7 @@
 
 #include "amigaos4_input.h"
 #include "bt_handler_hid.h"
+#include "bt_profile_handler.h"
 #include "btstack_run_loop_amigaos.h"
 
 
@@ -110,6 +111,19 @@ static bool verbose;
 /* -------------------------------------------------------------------------- */
 
 /* -------------------------------------------------------------------------- */
+
+/* the handler drives the device asynchronously, so this is where we learn
+ * whether it actually took it over */
+static void handler_status(hci_con_handle_t con_handle, bool in_use, uint8_t status){
+    UNUSED(con_handle);
+    if (in_use){
+        app_state = READY;
+        bthid_log("Ready - the mouse now controls the system pointer.\n");
+    } else if (status != ERROR_CODE_SUCCESS){
+        bthid_log("HID handler failed, status 0x%02x\n", status);
+        gap_disconnect(connection_handle);
+    }
+}
 
 static void input_poll_ds(btstack_data_source_t * ds, btstack_data_source_callback_type_t type){
     UNUSED(ds); UNUSED(type);
@@ -336,6 +350,7 @@ int btstack_main(int argc, const char * argv[]){
      * We are a HID host: without the server the loop cannot be entered at all.
      */
 
+    bt_profile_handler_set_status_callback(&handler_status);
     bt_handler_hid.init();
 
     hci_event_callback_registration.callback = &packet_handler;

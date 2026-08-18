@@ -210,11 +210,32 @@ static void device_attach_handler(bt_device_t * device){
         return;
     }
 
-    btstack_strcpy(device->info.handler, sizeof(device->info.handler), device->handler->name);
-    device->info.kind = device->handler->kind;
-    device_set_state(device, BT_DEVICE_STATE_IN_USE);
-    DebugPrintF("service: %s in use by handler '%s'\n",
-                bd_addr_to_str(device->info.bd_addr), device->handler->name);
+    /* the handler reports back through handler_status() once it really has the
+     * device - discovering the HID services takes a few round trips */
+    DebugPrintF("service: handler '%s' taking %s\n",
+                device->handler->name, bd_addr_to_str(device->info.bd_addr));
+}
+
+/* called by a handler when it starts or stops driving a device */
+static void handler_status(hci_con_handle_t con_handle, bool in_use, uint8_t status){
+    bt_device_t * device = device_for_handle(con_handle);
+    if (device == NULL) return;
+
+    if (in_use){
+        btstack_strcpy(device->info.handler, sizeof(device->info.handler), device->handler->name);
+        device_set_state(device, BT_DEVICE_STATE_IN_USE);
+        DebugPrintF("service: %s in use by handler '%s'\n",
+                    bd_addr_to_str(device->info.bd_addr), device->info.handler);
+        return;
+    }
+
+    device->info.handler[0] = 0;
+    if (status != ERROR_CODE_SUCCESS){
+        DebugPrintF("service: handler failed on %s, status 0x%02x\n",
+                    bd_addr_to_str(device->info.bd_addr), status);
+        device->handler = NULL;
+        gap_disconnect(con_handle);
+    }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -658,6 +679,8 @@ int btstack_main(int argc, const char * argv[]){
 
     /* no ATT server: we are a central, and running one opens a re-entrancy in
      * att_server that recurses until the stack overflows. See bthid.c. */
+
+    bt_profile_handler_set_status_callback(&handler_status);
 
     const bt_profile_handler_t ** handlers = bt_profile_handlers();
     for (i = 0; handlers[i] != NULL; i++){

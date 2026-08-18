@@ -80,6 +80,7 @@
 #include "btstack_run_loop_amigaos.h"
 #include "btstack_stdin.h"
 #include "amigaos4_input.h"
+#include "bt_service_port.h"
 #include "btstack_tlv_posix.h"
 #include "classic/btstack_link_key_db_tlv.h"
 #include "hal_led.h"
@@ -543,6 +544,12 @@ int main(int argc, const char * argv[]){
     // nothing otherwise, and releases held mouse buttons before closing.
     amigaos4_input_dump_stats();
     amigaos4_input_close();
+
+    // Remove the public MsgPort if an application (BluetoothService) created
+    // one. Does nothing otherwise. Without this the port stays registered after
+    // the process is gone, its signal bits are never freed, and the next start
+    // finds the name taken by a port belonging to a task that no longer exists.
+    bt_service_port_close();
 
     // A forced exit (second CTRL-C) leaves the HCI state machine mid-flight, so
     // close the transport explicitly - this releases the USB interface and closes

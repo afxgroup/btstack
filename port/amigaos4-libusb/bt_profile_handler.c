@@ -22,6 +22,17 @@ static const bt_profile_handler_t * handlers[] = {
     NULL
 };
 
+static bt_profile_status_callback_t status_callback;
+
+void bt_profile_handler_set_status_callback(bt_profile_status_callback_t callback){
+    status_callback = callback;
+}
+
+void bt_profile_handler_report_status(hci_con_handle_t con_handle, bool in_use, uint8_t status){
+    if (status_callback == NULL) return;
+    status_callback(con_handle, in_use, status);
+}
+
 const bt_profile_handler_t ** bt_profile_handlers(void){
     return handlers;
 }

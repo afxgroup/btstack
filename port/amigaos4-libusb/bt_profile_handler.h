@@ -60,6 +60,25 @@ typedef struct {
 } bt_profile_handler_t;
 
 /**
+ * @brief Called when a handler starts or stops driving a device.
+ *
+ * A handler takes the device over asynchronously - the HID one has to discover
+ * services first - so whoever owns the connection only learns from here whether
+ * it worked. Without it an application has no way of knowing, which is how
+ * bthid ended up sitting at "Search for HID service" forever.
+ *
+ * @param con_handle the connection
+ * @param in_use     true when the handler is now driving it
+ * @param status     ERROR_CODE_SUCCESS, or why it failed
+ */
+typedef void (*bt_profile_status_callback_t)(hci_con_handle_t con_handle, bool in_use, uint8_t status);
+
+void bt_profile_handler_set_status_callback(bt_profile_status_callback_t callback);
+
+/** @brief Called by the handlers themselves */
+void bt_profile_handler_report_status(hci_con_handle_t con_handle, bool in_use, uint8_t status);
+
+/**
  * @brief The handlers built into the service, NULL terminated.
  */
 const bt_profile_handler_t ** bt_profile_handlers(void);

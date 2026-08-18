@@ -169,12 +169,16 @@ static void hid_gatt_event_handler(uint8_t packet_type, uint16_t channel, uint8_
 
     switch (hci_event_gattservice_meta_get_subevent_code(packet)){
         case GATTSERVICE_SUBEVENT_HID_SERVICE_CONNECTED:
-            if (gattservice_subevent_hid_service_connected_get_status(packet) == ERROR_CODE_SUCCESS){
-                DebugPrintF("hid: service connected, %d instances\n",
-                            gattservice_subevent_hid_service_connected_get_num_instances(packet));
-            } else {
-                DebugPrintF("hid: service connection failed, status 0x%02x\n",
-                            gattservice_subevent_hid_service_connected_get_status(packet));
+            {
+                uint8_t status = gattservice_subevent_hid_service_connected_get_status(packet);
+                if (status == ERROR_CODE_SUCCESS){
+                    DebugPrintF("hid: service connected, %d instances\n",
+                                gattservice_subevent_hid_service_connected_get_num_instances(packet));
+                } else {
+                    DebugPrintF("hid: service connection failed, status 0x%02x\n", status);
+                    hid_con_handle = HCI_CON_HANDLE_INVALID;
+                }
+                bt_profile_handler_report_status(hid_con_handle, status == ERROR_CODE_SUCCESS, status);
             }
             break;
 
@@ -182,7 +186,11 @@ static void hid_gatt_event_handler(uint8_t packet_type, uint16_t channel, uint8_
             DebugPrintF("hid: service disconnected\n");
             /* do not leave a button pressed behind */
             amigaos4_input_mouse_buttons(0);
-            hid_con_handle = HCI_CON_HANDLE_INVALID;
+            {
+                hci_con_handle_t gone = hid_con_handle;
+                hid_con_handle = HCI_CON_HANDLE_INVALID;
+                bt_profile_handler_report_status(gone, false, ERROR_CODE_SUCCESS);
+            }
             break;
 
         case GATTSERVICE_SUBEVENT_HID_REPORT:
