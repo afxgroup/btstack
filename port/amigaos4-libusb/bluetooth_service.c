@@ -340,18 +340,42 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             }
             break;
 
-        case GAP_EVENT_ADVERTISING_REPORT: {
+        /*
+         * Both report events have to be handled. With ENABLE_LE_EXTENDED_ADVERTISING
+         * and a controller that supports it, BTstack scans with the extended
+         * commands: an advertisement marked legacy is converted to
+         * GAP_EVENT_ADVERTISING_REPORT, everything else arrives as
+         * GAP_EVENT_EXTENDED_ADVERTISING_REPORT. Handling only the first means
+         * seeing nothing at all from a device that advertises the modern way.
+         */
+        case GAP_EVENT_ADVERTISING_REPORT:
+        case GAP_EVENT_EXTENDED_ADVERTISING_REPORT: {
+            const uint8_t * ad_data;
+            uint8_t         ad_len;
+            uint8_t         addr_type;
+            int8_t          rssi;
+
+            if (hci_event_packet_get_type(packet) == GAP_EVENT_ADVERTISING_REPORT){
+                gap_event_advertising_report_get_address(packet, addr);
+                addr_type = gap_event_advertising_report_get_address_type(packet);
+                rssi      = (int8_t) gap_event_advertising_report_get_rssi(packet);
+                ad_data   = gap_event_advertising_report_get_data(packet);
+                ad_len    = gap_event_advertising_report_get_data_length(packet);
+            } else {
+                gap_event_extended_advertising_report_get_address(packet, addr);
+                addr_type = gap_event_extended_advertising_report_get_address_type(packet);
+                rssi      = gap_event_extended_advertising_report_get_rssi(packet);
+                ad_data   = gap_event_extended_advertising_report_get_data(packet);
+                ad_len    = gap_event_extended_advertising_report_get_data_length(packet);
+            }
+
             if (!scanning) break;
 
-            gap_event_advertising_report_get_address(packet, addr);
-            const uint8_t * ad_data = gap_event_advertising_report_get_data(packet);
-            uint8_t         ad_len  = gap_event_advertising_report_get_data_length(packet);
-
             bool is_new = device_for_addr(addr) == NULL;
-            device = device_add(addr, gap_event_advertising_report_get_address_type(packet));
+            device = device_add(addr, addr_type);
             if (device == NULL) break;
 
-            device->info.rssi = (int8_t) gap_event_advertising_report_get_rssi(packet);
+            device->info.rssi = rssi;
 
             /* remember which handler wants it, so connecting is a decision the
              * user makes and not a guess made later */
@@ -379,8 +403,8 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             }
 
             if (is_new){
-                DebugPrintF("service: found %s '%s'%s\n", bd_addr_to_str(addr), device->info.name,
-                            handler ? " (supported)" : "");
+                DebugPrintF("service: found %s '%s' rssi %d%s\n", bd_addr_to_str(addr),
+                            device->info.name, rssi, handler ? " (supported)" : "");
                 bt_service_port_notify(BTEVENT_DEVICE_FOUND, &device->info, 0);
             }
 
