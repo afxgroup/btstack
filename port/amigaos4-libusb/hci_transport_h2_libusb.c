@@ -168,6 +168,36 @@ void hci_transport_usb_set_bus_and_path(uint8_t bus, int len, uint8_t* port_numb
     usb_bus = bus;
 }
 
+/*
+ * A device reporting class 0 leaves the classification to its interfaces, which
+ * is legal USB and what several controllers do. Look for the Bluetooth
+ * interface there: Wireless Controller / RF Controller / Bluetooth programming.
+ */
+static bool usb_device_has_bt_interface(libusb_device * device){
+    struct libusb_config_descriptor * config;
+    if (libusb_get_config_descriptor(device, 0, &config) != 0) return false;
+    if (config == NULL) return false;
+
+    bool found = false;
+    for (int i = 0; (i < config->bNumInterfaces) && !found; i++){
+        const struct libusb_interface * iface = &config->interface[i];
+        if (!iface || !iface->altsetting) continue;
+        for (int a = 0; a < iface->num_altsetting; a++){
+            const struct libusb_interface_descriptor * alt = &iface->altsetting[a];
+            if (!alt) continue;
+            if ((alt->bInterfaceClass    == 0xE0) &&
+                (alt->bInterfaceSubClass == 0x01) &&
+                (alt->bInterfaceProtocol == 0x01)){
+                found = true;
+                break;
+            }
+        }
+    }
+
+    libusb_free_config_descriptor(config);
+    return found;
+}
+
 static libusb_device * usb_find_device(void){
     libusb_device ** list;
     ssize_t cnt = libusb_get_device_list(usb_ctx, &list);
@@ -186,17 +216,17 @@ static libusb_device * usb_find_device(void){
          * controller - which most are. A chipset that needs a firmware upload
          * still needs its own driver on top, see btstack_chipset_realtek.
          *
-         * A device reporting class 0 leaves the classification to its
-         * interfaces, and those cannot be read here: on this libusb-1.library
-         * libusb_get_config_descriptor() returns the interfaces of the whole
-         * bus for a device that is not open - every device answers with the
-         * same list. Such a controller has to be named with -d VID:PID until
-         * the library is fixed.
+         * Devices reporting class 0 classify at interface level and are
+         * checked there, see usb_device_has_bt_interface(). A controller that
+         * declares neither can still be named with -d VID:PID.
          */
         if ((desc.bDeviceClass == 0xE0) && (desc.bDeviceSubClass == 0x01) && (desc.bDeviceProtocol == 0x01)){
             found = list[i];
+        } else if ((desc.bDeviceClass == 0x00) && usb_device_has_bt_interface(list[i])){
+            /* classification left to the interfaces */
+            found = list[i];
         } else {
-            /* known device that does not declare the standard class */
+            /* known device that declares neither */
             btstack_linked_list_iterator_t it;
             btstack_linked_list_iterator_init(&it, &usb_known_devices);
             while (btstack_linked_list_iterator_has_next(&it)){

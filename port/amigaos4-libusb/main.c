@@ -508,8 +508,16 @@ int main(int argc, const char * argv[]){
         hci_transport_usb_add_device(vendor_id, product_id);
     }
 
-    // setup app
-    btstack_main(argc, argv);
+    // setup app. A negative return means the application refused to start -
+    // BluetoothService does that when another instance already owns the public
+    // port. Running the loop anyway would leave a second, useless process
+    // behind, which is exactly what happened.
+    if (btstack_main(argc, argv) < 0){
+        hci_transport_usb_instance()->close();
+        btstack_run_loop_amigaos_deinit();
+        amigaos4_libusb1_close();
+        return EXIT_FAILURE;
+    }
 
     // sm_init() - called by the example above - always enables LE Secure
     // Connections Only mode when ENABLE_LE_SECURE_CONNECTIONS is configured, so

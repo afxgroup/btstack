@@ -35,14 +35,18 @@ LONG _USBFD_USBFDRunInterface(struct USBFDIFace *Self __attribute__((unused)),
     if (descriptor->id_Class != USBCLASS_WIRELESS)
         return USBERR_UNSUPPORTED;
 
-    /*
-     * A Bluetooth controller exposes several interfaces - HCI, plus the
-     * isochronous ones for SCO audio - but only interface 0 carries the
-     * Bluetooth protocol descriptor. Matching on it gives exactly one
-     * notification per dongle instead of one per interface.
-     */
     if ((descriptor->id_Subclass != USBSUBCLASS_RF) ||
         (descriptor->id_Protocol != USBPROTO_BLUETOOTH))
+        return USBERR_UNSUPPORTED;
+
+    /*
+     * A Bluetooth controller exposes *two* interfaces with this very class:
+     * interface 0 carries HCI events and ACL data, interface 1 the
+     * isochronous endpoints for SCO audio. Without this check the driver
+     * fires twice per dongle, and starts the service twice - the second one
+     * finding the port already taken.
+     */
+    if (descriptor->id_InterfaceID != 0)
         return USBERR_UNSUPPORTED;
 
     return fdmain(startmsg);

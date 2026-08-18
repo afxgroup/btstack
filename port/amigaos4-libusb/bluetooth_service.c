@@ -51,6 +51,17 @@
 
 #define MAX_DEVICES 32
 
+/* the known devices are kept in the TLV, so a restart - or a reboot - finds the
+ * mouse again without the user pairing it a second time */
+#define TLV_TAG_DEVICES ((((uint32_t)'B')<<24)|(((uint32_t)'T')<<16)|(((uint32_t)'D')<<8)|'V')
+
+typedef struct {
+    uint8_t bd_addr[6];
+    uint8_t addr_type;
+    uint8_t kind;
+    char    name[32];
+} bt_stored_device_t;
+
 /* how long to wait for an outgoing connection before giving up */
 #define CONNECTION_TIMEOUT_MS 10000
 
@@ -71,6 +82,14 @@ static bool     shutdown_requested;
 /* device we are currently connecting to, NULL when idle */
 static bt_device_t * pending_device;
 static btstack_timer_source_t connection_timer;
+
+/* true while scanning on our own initiative: a device a handler claims is then
+ * connected right away. A scan asked for by a client does not do that - the
+ * user is choosing, and connecting behind their back would be rude. */
+static bool autoconnect_on_find;
+
+static const btstack_tlv_t * tlv_impl;
+static void *                tlv_context;
 
 static btstack_packet_callback_registration_t hci_event_callback_registration;
 static btstack_packet_callback_registration_t sm_event_callback_registration;
@@ -130,6 +149,10 @@ static void device_set_state(bt_device_t * device, bt_device_state_t state){
 /* -------------------------------------------------------------------------- */
 /* connecting                                                                 */
 
+static bt_result_t   device_connect(bt_device_t * device);
+static bt_device_t * device_next_to_reconnect(void);
+static void          scan_start(bool autoconnect);
+
 static void connection_timeout_handler(btstack_timer_source_t * ts){
     UNUSED(ts);
     if (pending_device == NULL) return;
@@ -137,6 +160,15 @@ static void connection_timeout_handler(btstack_timer_source_t * ts){
     gap_connect_cancel();
     device_set_state(pending_device, BT_DEVICE_STATE_BONDED);
     pending_device = NULL;
+
+    /* a device that is off or out of range must not stop the service from
+     * finding the others */
+    bt_device_t * next = device_next_to_reconnect();
+    if (next != NULL){
+        device_connect(next);
+    } else {
+        scan_start(true);
+    }
 }
 
 static bt_result_t device_connect(bt_device_t * device){
@@ -186,6 +218,95 @@ static void device_attach_handler(bt_device_t * device){
 }
 
 /* -------------------------------------------------------------------------- */
+/* known devices                                                              */
+
+static void devices_store(void){
+    if (tlv_impl == NULL) return;
+
+    bt_stored_device_t stored[MAX_DEVICES];
+    uint8_t count = 0;
+    uint8_t i;
+    for (i = 0; i < MAX_DEVICES; i++){
+        if (!devices[i].in_use) continue;
+        if (!devices[i].autoconnect) continue;   /* only what we should reconnect */
+        memcpy(stored[count].bd_addr, devices[i].info.bd_addr, 6);
+        stored[count].addr_type = devices[i].info.addr_type;
+        stored[count].kind      = (uint8_t) devices[i].info.kind;
+        btstack_strcpy(stored[count].name, sizeof(stored[count].name), devices[i].info.name);
+        count++;
+    }
+
+    tlv_impl->store_tag(tlv_context, TLV_TAG_DEVICES, (const uint8_t *) stored,
+                        count * sizeof(bt_stored_device_t));
+    DebugPrintF("service: %u known device(s) stored\n", count);
+}
+
+static uint8_t devices_load(void){
+    btstack_tlv_get_instance(&tlv_impl, &tlv_context);
+    if (tlv_impl == NULL) return 0;
+
+    bt_stored_device_t stored[MAX_DEVICES];
+    int len = tlv_impl->get_tag(tlv_context, TLV_TAG_DEVICES, (uint8_t *) stored, sizeof(stored));
+    if (len <= 0) return 0;
+
+    uint8_t count = (uint8_t) (len / sizeof(bt_stored_device_t));
+    uint8_t i;
+    for (i = 0; i < count; i++){
+        bt_device_t * device = device_add(stored[i].bd_addr, stored[i].addr_type);
+        if (device == NULL) break;
+        device->autoconnect = true;
+        device->info.state  = BT_DEVICE_STATE_BONDED;
+        device->info.kind   = (bt_device_kind_t) stored[i].kind;
+        btstack_strcpy(device->info.name, sizeof(device->info.name), stored[i].name);
+        DebugPrintF("service: known device %s '%s'\n",
+                    bd_addr_to_str(device->info.bd_addr), device->info.name);
+    }
+    return count;
+}
+
+/* first known device that is not connected, NULL if there is none */
+static bt_device_t * device_next_to_reconnect(void){
+    uint8_t i;
+    for (i = 0; i < MAX_DEVICES; i++){
+        if (!devices[i].in_use) continue;
+        if (!devices[i].autoconnect) continue;
+        if (devices[i].con_handle != HCI_CON_HANDLE_INVALID) continue;
+        return &devices[i];
+    }
+    return NULL;
+}
+
+static void scan_start(bool autoconnect){
+    if (scanning) return;
+    autoconnect_on_find = autoconnect;
+    gap_set_scan_parameters(0, 48, 48);
+    gap_start_scan();
+    scanning = true;
+    bt_service_port_notify(BTEVENT_SCAN_STARTED, NULL, 0);
+    DebugPrintF("service: scanning%s\n", autoconnect ? " (connecting to what we can drive)" : "");
+}
+
+/*
+ * What to do once the controller is up.
+ *
+ * Reconnect a device we already know, and if there is none go looking for one
+ * we can drive and connect it. Without this the service sat there doing
+ * nothing, waiting for a command from a GUI that does not exist yet - which is
+ * of no use to someone who just wants their mouse to work.
+ */
+static void service_start_working(void){
+    if (devices_load() > 0){
+        bt_device_t * device = device_next_to_reconnect();
+        if (device != NULL){
+            DebugPrintF("service: reconnecting to %s\n", bd_addr_to_str(device->info.bd_addr));
+            device_connect(device);
+            return;
+        }
+    }
+    scan_start(true);
+}
+
+/* -------------------------------------------------------------------------- */
 /* BTstack events                                                             */
 
 static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size){
@@ -205,6 +326,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                     controller_ready = true;
                     bt_service_port_notify(BTEVENT_CONTROLLER_READY, NULL, 0);
                     DebugPrintF("service: controller ready\n");
+                    service_start_working();
                     break;
                 case HCI_STATE_OFF:
                     controller_ready = false;
@@ -260,6 +382,12 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                 DebugPrintF("service: found %s '%s'%s\n", bd_addr_to_str(addr), device->info.name,
                             handler ? " (supported)" : "");
                 bt_service_port_notify(BTEVENT_DEVICE_FOUND, &device->info, 0);
+            }
+
+            /* connect what we can actually drive, when scanning by ourselves */
+            if (autoconnect_on_find && (handler != NULL) && (pending_device == NULL)){
+                DebugPrintF("service: connecting to %s\n", bd_addr_to_str(addr));
+                device_connect(device);
             }
             break;
         }
@@ -355,6 +483,7 @@ static void sm_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *pa
         if (device == NULL) return;
         device->autoconnect = true;
         device_attach_handler(device);
+        devices_store();
         if (pending_device == device){
             pending_device = NULL;
         }
@@ -390,12 +519,7 @@ static bt_result_t handle_command(BTServiceMsg * msg){
         case BTCMD_SCAN_START:
             if (controller_ready == false) return BT_RESULT_NO_CONTROLLER;
             if (pending_device != NULL)     return BT_RESULT_BUSY;
-            if (!scanning){
-                gap_set_scan_parameters(0, 48, 48);
-                gap_start_scan();
-                scanning = true;
-                bt_service_port_notify(BTEVENT_SCAN_STARTED, NULL, 0);
-            }
+            scan_start(false);
             return BT_RESULT_OK;
 
         case BTCMD_SCAN_STOP:
@@ -450,6 +574,7 @@ static bt_result_t handle_command(BTServiceMsg * msg){
             }
             gap_delete_bonding((bd_addr_type_t) device->info.addr_type, device->info.bd_addr);
             device->info.state = BT_DEVICE_STATE_FOUND;
+            devices_store();
             bt_service_port_notify(BTEVENT_DEVICE_UPDATED, &device->info, 0);
             return BT_RESULT_OK;
 

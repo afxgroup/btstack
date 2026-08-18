@@ -76,6 +76,15 @@ dongle in starts the service through `bt.usbfd`. A `SYS:WBStartup` entry is a
 reasonable alternative for a dongle that is never unplugged, and the service
 must handle both, hence `BTCMD_PING` and the "is it already running" check.
 
+## Stopping the service
+
+The service handles `SIGBREAKF_CTRL_C`, so it stops from Ranger or any task
+tool with a Break/CTRL-C, and from a shell with CTRL-C. The first break powers
+Bluetooth off cleanly - handlers release their devices, held mouse buttons are
+released - and the process exits when the controller reports itself off; a
+second break forces the run loop out. `BTCMD_SHUTDOWN` on the public port does
+the same thing and is what the GUI will use.
+
 ## Build
 
 ```bash
