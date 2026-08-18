@@ -336,8 +336,28 @@ static void hid_handler_init(void){
 }
 
 static bool hid_handler_probe(const uint8_t * ad_data, uint8_t ad_len){
-    return ad_data_contains_uuid16(ad_len, (uint8_t *) ad_data,
-                                   ORG_BLUETOOTH_SERVICE_HUMAN_INTERFACE_DEVICE);
+
+    if (ad_data_contains_uuid16(ad_len, (uint8_t *) ad_data,
+                                ORG_BLUETOOTH_SERVICE_HUMAN_INTERFACE_DEVICE)){
+        return true;
+    }
+
+    /*
+     * Not every HID device lists the HID service UUID in its advertisement -
+     * plenty of keyboards only carry the Appearance field. Category 0x00F
+     * (values 0x03C0..0x03FF) is HID: keyboard 0x03C1, mouse 0x03C2, and so on.
+     */
+    ad_context_t context;
+    for (ad_iterator_init(&context, ad_len, (uint8_t *) ad_data);
+         ad_iterator_has_more(&context);
+         ad_iterator_next(&context)){
+        if (ad_iterator_get_data_type(&context) != BLUETOOTH_DATA_TYPE_APPEARANCE) continue;
+        if (ad_iterator_get_data_len(&context) < 2) continue;
+        uint16_t appearance = little_endian_read_16(ad_iterator_get_data(&context), 0);
+        if ((appearance >> 6) == 0x00F) return true;
+    }
+
+    return false;
 }
 
 static uint8_t hid_handler_connect(hci_con_handle_t con_handle){

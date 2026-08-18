@@ -156,22 +156,18 @@ static void device_set_state(bt_device_t * device, bt_device_state_t state){
 /* connecting                                                                 */
 
 static bt_result_t   device_connect(bt_device_t * device);
-static bt_device_t * device_next_to_reconnect(void);
 static void          scan_start(bool autoconnect);
+static void          scan_resume_if_idle(void);
 
 /*
- * Try the next known device, or start scanning. Called only from a fresh event
- * - never from inside the call stack that is unwinding a connection attempt -
- * see the long comment in connection_timeout_handler() for why that matters.
+ * After a failed attempt, go back to scanning. Known devices reconnect when
+ * they are seen advertising, so this never dials an absent device again.
+ * Called only from a fresh timer event - never from inside the call stack that
+ * is unwinding a connection attempt - see connection_timeout_handler().
  */
 static void connection_retry_timeout(btstack_timer_source_t * ts){
     UNUSED(ts);
-    bt_device_t * next = device_next_to_reconnect();
-    if (next != NULL){
-        device_connect(next);
-    } else {
-        scan_start(true);
-    }
+    scan_start(true);
 }
 
 static void connection_retry_later(void){
@@ -297,6 +293,8 @@ static void handler_status(hci_con_handle_t con_handle, bool in_use, uint8_t sta
         device_set_state(device, BT_DEVICE_STATE_IN_USE);
         DebugPrintF("service: %s in use by handler '%s'\n",
                     bd_addr_to_str(device->info.bd_addr), device->info.handler);
+        /* keep looking: a mouse being in use says nothing about the keyboard */
+        scan_resume_if_idle();
         return;
     }
 
@@ -356,16 +354,19 @@ static uint8_t devices_load(void){
     return count;
 }
 
-/* first known device that is not connected, NULL if there is none */
-static bt_device_t * device_next_to_reconnect(void){
-    uint8_t i;
-    for (i = 0; i < MAX_DEVICES; i++){
-        if (!devices[i].in_use) continue;
-        if (!devices[i].autoconnect) continue;
-        if (devices[i].con_handle != HCI_CON_HANDLE_INVALID) continue;
-        return &devices[i];
-    }
-    return NULL;
+/*
+ * Resume scanning after a connection attempt has concluded.
+ *
+ * device_connect() stops the scan while it runs, and nothing used to turn it
+ * back on: with a mouse and a keyboard, whichever connected first left the
+ * other one invisible for ever. Scanning is also how a known device that is
+ * switched on later gets reconnected, so idle means scanning.
+ */
+static void scan_resume_if_idle(void){
+    if (shutdown_requested)     return;
+    if (pending_device != NULL) return;   /* another attempt is running */
+    if (controller_ready == false) return;
+    scan_start(true);
 }
 
 static void scan_start(bool autoconnect){
@@ -379,22 +380,18 @@ static void scan_start(bool autoconnect){
 }
 
 /*
- * What to do once the controller is up.
+ * What to do once the controller is up: load what we know, then scan.
  *
- * Reconnect a device we already know, and if there is none go looking for one
- * we can drive and connect it. Without this the service sat there doing
- * nothing, waiting for a command from a GUI that does not exist yet - which is
- * of no use to someone who just wants their mouse to work.
+ * Deliberately no direct connects here. A stored device that is switched off
+ * or out of range would make gap_connect() run into its timeout, over and
+ * over, and while an attempt is pending nothing else can connect - one absent
+ * mouse would stall the keyboard forever. Scanning instead costs nothing when
+ * nobody is there, and a known device showing up in the scan results is the
+ * proof it is awake and in range: that is the moment to reconnect, handled in
+ * the advertising report below.
  */
 static void service_start_working(void){
-    if (devices_load() > 0){
-        bt_device_t * device = device_next_to_reconnect();
-        if (device != NULL){
-            DebugPrintF("service: reconnecting to %s\n", bd_addr_to_str(device->info.bd_addr));
-            device_connect(device);
-            return;
-        }
-    }
+    devices_load();
     scan_start(true);
 }
 
@@ -500,6 +497,16 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                 bt_service_port_notify(BTEVENT_DEVICE_FOUND, &device->info, 0);
             }
 
+            /* a known device advertising is awake and in range - reconnect now.
+             * This replaces the blind gap_connect() at startup, which timed out
+             * over and over on a device that was simply switched off. */
+            if (device->autoconnect && (device->con_handle == HCI_CON_HANDLE_INVALID) &&
+                (pending_device == NULL) && !shutdown_requested){
+                DebugPrintF("service: known device %s is advertising, reconnecting\n", bd_addr_to_str(addr));
+                device_connect(device);
+                break;
+            }
+
             /* connect what we can actually drive, when scanning by ourselves */
             if (autoconnect_on_find && (handler != NULL) && (pending_device == NULL)){
                 DebugPrintF("service: connecting to %s\n", bd_addr_to_str(addr));
@@ -555,9 +562,11 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             device_set_state(device, BT_DEVICE_STATE_BONDED);
             DebugPrintF("service: %s disconnected\n", bd_addr_to_str(device->info.bd_addr));
 
-            /* a device we are meant to use comes back on its own */
+            /* a device we are meant to use reconnects when it advertises
+             * again - dialling it now would just time out if it went to
+             * sleep, blocking everything else meanwhile */
             if (device->autoconnect && !shutdown_requested){
-                device_connect(device);
+                scan_start(true);
             }
             break;
         }

@@ -130,11 +130,7 @@ static void input_poll_ds(btstack_data_source_t * ds, btstack_data_source_callba
     amigaos4_input_poll();
 }
 
-static bool adv_event_contains_hid_service(const uint8_t * packet){
-    const uint8_t * ad_data = gap_event_advertising_report_get_data(packet);
-    uint8_t ad_len = gap_event_advertising_report_get_data_length(packet);
-    return ad_data_contains_uuid16(ad_len, ad_data, ORG_BLUETOOTH_SERVICE_HUMAN_INTERFACE_DEVICE);
-}
+
 
 static void hog_start_scan(void){
     bthid_log("Scanning for LE HID devices...\n");
@@ -203,16 +199,46 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             btstack_assert(app_state == W4_WORKING);
             hog_start_connect();
             break;
+        /*
+         * Both report events, exactly as in bluetooth_service.c: with
+         * ENABLE_LE_EXTENDED_ADVERTISING and a controller that supports it,
+         * only advertisements flagged as legacy arrive as
+         * GAP_EVENT_ADVERTISING_REPORT - everything else comes in as
+         * GAP_EVENT_EXTENDED_ADVERTISING_REPORT. Handling just the first is
+         * why a keyboard advertising the modern way was never seen, while the
+         * mouse (advertising legacy) was.
+         */
         case GAP_EVENT_ADVERTISING_REPORT:
+        case GAP_EVENT_EXTENDED_ADVERTISING_REPORT: {
             if (app_state != W4_HID_DEVICE_FOUND) break;
-            if (adv_event_contains_hid_service(packet) == false) break;
+
+            const uint8_t * ad_data;
+            uint8_t         ad_len;
+            if (event == GAP_EVENT_ADVERTISING_REPORT){
+                ad_data = gap_event_advertising_report_get_data(packet);
+                ad_len  = gap_event_advertising_report_get_data_length(packet);
+            } else {
+                ad_data = gap_event_extended_advertising_report_get_data(packet);
+                ad_len  = gap_event_extended_advertising_report_get_data_length(packet);
+            }
+
+            /* the shared probe also accepts a HID Appearance field - many
+             * keyboards do not list the HID service UUID when advertising */
+            if (bt_profile_handler_probe(ad_data, ad_len) == NULL) break;
+
             gap_stop_scan();
-            gap_event_advertising_report_get_address(packet, remote_device.addr);
-            remote_device.addr_type = gap_event_advertising_report_get_address_type(packet);
+            if (event == GAP_EVENT_ADVERTISING_REPORT){
+                gap_event_advertising_report_get_address(packet, remote_device.addr);
+                remote_device.addr_type = gap_event_advertising_report_get_address_type(packet);
+            } else {
+                gap_event_extended_advertising_report_get_address(packet, remote_device.addr);
+                remote_device.addr_type = gap_event_extended_advertising_report_get_address_type(packet);
+            }
             bthid_log("Found, connect to device with %s address %s ...\n",
                    remote_device.addr_type == 0 ? "public" : "random", bd_addr_to_str(remote_device.addr));
             hog_connect();
             break;
+        }
         case HCI_EVENT_DISCONNECTION_COMPLETE:
             if (app_state != READY) break;
             connection_handle = HCI_CON_HANDLE_INVALID;
