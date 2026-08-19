@@ -29,6 +29,7 @@
 #include <proto/dos.h>
 #include <proto/intuition.h>
 #include <proto/utility.h>
+#include <proto/locale.h>
 #include <proto/window.h>
 #include <proto/layout.h>
 #include <proto/listbrowser.h>
@@ -39,6 +40,7 @@
 #include <string.h>
 
 #include "bluetooth_service.h"
+#include "bluetooth_gui_cat.h"
 
 /* ------------------------------------------------------------------------- */
 /* libraries                                                                 */
@@ -50,11 +52,37 @@
  * class from IListBrowser. So they are ours to fill in and ours to give back.
  */
 struct Library *IntuitionBase, *WindowBase, *LayoutBase, *ListBrowserBase, *ButtonBase;
+struct Library *LocaleBase;
+struct LocaleIFace *ILocale;
 struct IntuitionIFace   *IIntuition;
 struct WindowIFace      *IWindow;
 struct LayoutIFace      *ILayout;
 struct ListBrowserIFace *IListBrowser;
 struct ButtonIFace      *IButton;
+
+static struct Catalog * catalog;
+
+/*
+ * The text for a string ID, translated when there is a translation.
+ *
+ * The built-in English is what GetCatalogStr() falls back to, so every string
+ * has an answer whether or not a catalog is installed, whether or not it covers
+ * this ID, and whether or not locale.library opened at all. Nothing here has to
+ * check.
+ */
+static CONST_STRPTR GetString(LONG id){
+    CONST_STRPTR text = (CONST_STRPTR) "";
+    uint32 i;
+
+    for (i = 0; i < CATCOMP_ARRAY_SIZE; i++){
+        if (CatCompArray[i].cca_ID == id){
+            text = (CONST_STRPTR) CatCompArray[i].cca_Str;
+            break;
+        }
+    }
+    if (ILocale == NULL) return text;
+    return (CONST_STRPTR) GetCatalogStr(catalog, id, (CONST_STRPTR) text);
+}
 
 /*
  * The ReAction classes are opened by hand.
@@ -208,22 +236,22 @@ static void known_refresh(void){
 
 static const char * kind_name(bt_device_kind_t kind){
     switch (kind){
-        case BT_DEVICE_KIND_MOUSE:    return "Mouse";
-        case BT_DEVICE_KIND_KEYBOARD: return "Keyboard";
-        case BT_DEVICE_KIND_GAMEPAD:  return "Gamepad";
-        case BT_DEVICE_KIND_AUDIO:    return "Audio";
-        case BT_DEVICE_KIND_SERIAL:   return "Serial";
+        case BT_DEVICE_KIND_MOUSE:    return (const char *) GetString(MSG_KIND_MOUSE);
+        case BT_DEVICE_KIND_KEYBOARD: return (const char *) GetString(MSG_KIND_KEYBOARD);
+        case BT_DEVICE_KIND_GAMEPAD:  return (const char *) GetString(MSG_KIND_GAMEPAD);
+        case BT_DEVICE_KIND_AUDIO:    return (const char *) GetString(MSG_KIND_AUDIO);
+        case BT_DEVICE_KIND_SERIAL:   return (const char *) GetString(MSG_KIND_SERIAL);
         default:                      return "";
     }
 }
 
 static const char * state_name(bt_device_state_t state){
     switch (state){
-        case BT_DEVICE_STATE_FOUND:      return "Found";
-        case BT_DEVICE_STATE_BONDED:     return "Paired";
-        case BT_DEVICE_STATE_CONNECTING: return "Connecting";
-        case BT_DEVICE_STATE_CONNECTED:  return "Connected";
-        case BT_DEVICE_STATE_IN_USE:     return "In use";
+        case BT_DEVICE_STATE_FOUND:      return (const char *) GetString(MSG_STATE_FOUND);
+        case BT_DEVICE_STATE_BONDED:     return (const char *) GetString(MSG_STATE_PAIRED);
+        case BT_DEVICE_STATE_CONNECTING: return (const char *) GetString(MSG_STATE_CONNECTING);
+        case BT_DEVICE_STATE_CONNECTED:  return (const char *) GetString(MSG_STATE_CONNECTED);
+        case BT_DEVICE_STATE_IN_USE:     return (const char *) GetString(MSG_STATE_IN_USE);
         default:                         return "";
     }
 }
@@ -317,18 +345,52 @@ static int32 selected_row(Object * gadget){
 
 /* ------------------------------------------------------------------------- */
 
-static struct ColumnInfo * make_columns(const char * a, const char * b,
-                                        const char * c, const char * d){
-    struct ColumnInfo * ci = AllocLBColumnInfo(4,
-        LBCIA_Column, 0, LBCIA_Title, a, LBCIA_Weight, 34, TAG_END,
-        LBCIA_Column, 1, LBCIA_Title, b, LBCIA_Weight, 33, TAG_END,
-        LBCIA_Column, 2, LBCIA_Title, c, LBCIA_Weight, 16, TAG_END,
-        LBCIA_Column, 3, LBCIA_Title, d, LBCIA_Weight, 17, TAG_END,
-        TAG_END);
-    return ci;
+/*
+ * Columns as a plain array, which is what listbrowser.gadget wants.
+ *
+ * The first attempt built these with AllocLBColumnInfo() and weights, and only
+ * the first column ever appeared: everything else ended up in one nameless
+ * space with the names cut off at five characters. A static array terminated by
+ * { -1, (STRPTR)~0, -1 } is the form that works, and pixel widths are what it
+ * takes - the titles are filled in at startup because they are translated and a
+ * static initialiser cannot call anything.
+ */
+static struct ColumnInfo nearby_columns[] = {
+    { 160, NULL, CIF_DRAGGABLE },
+    { 150, NULL, CIF_DRAGGABLE },
+    {  80, NULL, CIF_DRAGGABLE },
+    {  90, NULL, CIF_DRAGGABLE },
+    {  -1, (STRPTR) ~0, -1 }
+};
+
+static struct ColumnInfo known_columns[] = {
+    { 160, NULL, CIF_DRAGGABLE },
+    { 150, NULL, CIF_DRAGGABLE },
+    {  90, NULL, CIF_DRAGGABLE },
+    { 100, NULL, CIF_DRAGGABLE },
+    {  -1, (STRPTR) ~0, -1 }
+};
+
+static void columns_translate(void){
+    nearby_columns[0].ci_Title = (STRPTR) GetString(MSG_CI_NAME);
+    nearby_columns[1].ci_Title = (STRPTR) GetString(MSG_CI_ADDRESS);
+    nearby_columns[2].ci_Title = (STRPTR) GetString(MSG_CI_SIGNAL);
+    nearby_columns[3].ci_Title = (STRPTR) GetString(MSG_CI_KIND);
+
+    known_columns[0].ci_Title  = (STRPTR) GetString(MSG_CI_NAME);
+    known_columns[1].ci_Title  = (STRPTR) GetString(MSG_CI_ADDRESS);
+    known_columns[2].ci_Title  = (STRPTR) GetString(MSG_CI_KIND);
+    known_columns[3].ci_Title  = (STRPTR) GetString(MSG_CI_STATE);
 }
 
 int main(void){
+
+    /* a missing catalog is not a failure: GetString() falls back to English */
+    LocaleBase = open_class("locale.library", 52, (APTR *) &ILocale);
+    if (ILocale != NULL){
+        catalog = OpenCatalogA(NULL, "BluetoothGUI.catalog", NULL);
+    }
+    columns_translate();
 
     IntuitionBase   = open_class("intuition.library", 51,     (APTR *) &IIntuition);
     WindowBase      = open_class("window.class", 53,          (APTR *) &IWindow);
@@ -338,7 +400,7 @@ int main(void){
 
     if ((IntuitionBase == NULL) || (WindowBase == NULL) || (LayoutBase == NULL) ||
         (ListBrowserBase == NULL) || (ButtonBase == NULL)){
-        printf("Cannot open the ReAction classes this needs.\n");
+        printf("%s\n", GetString(MSG_NO_CLASSES));
         return RETURN_FAIL;
     }
 
@@ -353,34 +415,37 @@ int main(void){
     NewList(&known_labels);
 
     if (!service_present()){
-        printf("BluetoothService is not running - start it first.\n");
+        printf("%s\n", GetString(MSG_NO_SERVICE));
     }
 
     gad_nearby = ListBrowserObject,
-        GA_ID,                   GID_NEARBY,
-        GA_RelVerify,            TRUE,
-        LISTBROWSER_ColumnInfo,  make_columns("Name", "Address", "Signal", "Kind"),
-        LISTBROWSER_ColumnTitles, TRUE,
-        LISTBROWSER_Labels,      &nearby_labels,
-        LISTBROWSER_ShowSelected, TRUE,
-        LISTBROWSER_AutoFit,     TRUE,
+        GA_ID,                      GID_NEARBY,
+        GA_RelVerify,               TRUE,
+        LISTBROWSER_ColumnInfo,     &nearby_columns,
+        LISTBROWSER_ColumnTitles,   TRUE,
+        LISTBROWSER_Labels,         &nearby_labels,
+        LISTBROWSER_ShowSelected,   TRUE,
+        LISTBROWSER_HorizontalProp, TRUE,
+        LISTBROWSER_Separators,     TRUE,
     End;
 
     gad_known = ListBrowserObject,
-        GA_ID,                   GID_KNOWN,
-        GA_RelVerify,            TRUE,
-        LISTBROWSER_ColumnInfo,  make_columns("Name", "Address", "Kind", "State"),
-        LISTBROWSER_ColumnTitles, TRUE,
-        LISTBROWSER_Labels,      &known_labels,
-        LISTBROWSER_ShowSelected, TRUE,
-        LISTBROWSER_AutoFit,     TRUE,
+        GA_ID,                      GID_KNOWN,
+        GA_RelVerify,               TRUE,
+        LISTBROWSER_ColumnInfo,     &known_columns,
+        LISTBROWSER_ColumnTitles,   TRUE,
+        LISTBROWSER_Labels,         &known_labels,
+        LISTBROWSER_ShowSelected,   TRUE,
+        LISTBROWSER_HorizontalProp, TRUE,
+        LISTBROWSER_Separators,     TRUE,
     End;
 
     gad_scan = ButtonObject, GA_ID, GID_SCAN, GA_RelVerify, TRUE,
-                             GA_Text, "_Scan", End;
+                             GA_Text,     GetString(MSG_BUTTON_SCAN),
+                             GA_HintInfo, GetString(MSG_HINT_SCAN), End;
 
     win_obj = WindowObject,
-        WA_Title,          "Bluetooth Devices",
+        WA_Title,          GetString(MSG_WINDOW_TITLE),
         WA_Width,          660,
         WA_Height,         360,
         WA_CloseGadget,    TRUE,
@@ -391,34 +456,63 @@ int main(void){
         WINDOW_Position,   WPOS_CENTERSCREEN,
         WINDOW_IconifyGadget, TRUE,
         WINDOW_Layout, VLayoutObject,
-            LAYOUT_SpaceOuter, TRUE,
+            LAYOUT_SpaceOuter,  TRUE,
             LAYOUT_DeferLayout, TRUE,
 
+            /*
+             * The list takes the room and the buttons take none.
+             *
+             * Weighting the whole group zero instead squashed both lists to a
+             * few pixels while the window kept its size, which is what the
+             * first version did.
+             */
             LAYOUT_AddChild, VLayoutObject,
-                LAYOUT_Label,    "Nearby",
                 LAYOUT_BevelStyle, BVS_GROUP,
+                LAYOUT_Label,      GetString(MSG_NEARBY),
+                LAYOUT_SpaceInner, TRUE,
+
                 LAYOUT_AddChild, gad_nearby,
+
                 LAYOUT_AddChild, HLayoutObject,
+                    LAYOUT_EvenSize, TRUE,
                     LAYOUT_AddChild, gad_scan,
-                    LAYOUT_AddChild, ButtonObject, GA_ID, GID_PAIR, GA_RelVerify, TRUE,
-                                                   GA_Text, "_Pair", End,
-                    LAYOUT_AddChild, HLayoutObject, End,   /* pushes the buttons left */
+                    LAYOUT_AddChild, ButtonObject,
+                        GA_ID,        GID_PAIR,
+                        GA_RelVerify, TRUE,
+                        GA_Text,      GetString(MSG_BUTTON_PAIR),
+                        GA_HintInfo,  GetString(MSG_HINT_PAIR),
+                    End,
                 End,
                 CHILD_WeightedHeight, 0,
             End,
 
             LAYOUT_AddChild, VLayoutObject,
-                LAYOUT_Label,    "Known devices",
                 LAYOUT_BevelStyle, BVS_GROUP,
+                LAYOUT_Label,      GetString(MSG_KNOWN),
+                LAYOUT_SpaceInner, TRUE,
+
                 LAYOUT_AddChild, gad_known,
+
                 LAYOUT_AddChild, HLayoutObject,
-                    LAYOUT_AddChild, ButtonObject, GA_ID, GID_CONNECT, GA_RelVerify, TRUE,
-                                                   GA_Text, "_Connect", End,
-                    LAYOUT_AddChild, ButtonObject, GA_ID, GID_DISCONNECT, GA_RelVerify, TRUE,
-                                                   GA_Text, "_Disconnect", End,
-                    LAYOUT_AddChild, ButtonObject, GA_ID, GID_FORGET, GA_RelVerify, TRUE,
-                                                   GA_Text, "_Forget", End,
-                    LAYOUT_AddChild, HLayoutObject, End,
+                    LAYOUT_EvenSize, TRUE,
+                    LAYOUT_AddChild, ButtonObject,
+                        GA_ID,        GID_CONNECT,
+                        GA_RelVerify, TRUE,
+                        GA_Text,      GetString(MSG_BUTTON_CONNECT),
+                        GA_HintInfo,  GetString(MSG_HINT_CONNECT),
+                    End,
+                    LAYOUT_AddChild, ButtonObject,
+                        GA_ID,        GID_DISCONNECT,
+                        GA_RelVerify, TRUE,
+                        GA_Text,      GetString(MSG_BUTTON_DISCONNECT),
+                        GA_HintInfo,  GetString(MSG_HINT_DISCONNECT),
+                    End,
+                    LAYOUT_AddChild, ButtonObject,
+                        GA_ID,        GID_FORGET,
+                        GA_RelVerify, TRUE,
+                        GA_Text,      GetString(MSG_BUTTON_FORGET),
+                        GA_HintInfo,  GetString(MSG_HINT_FORGET),
+                    End,
                 End,
                 CHILD_WeightedHeight, 0,
             End,
@@ -432,7 +526,7 @@ int main(void){
 
     window = (struct Window *) IDoMethod(win_obj, WM_OPEN, NULL);
     if (window == NULL){
-        printf("Cannot open the window.\n");
+        printf("%s\n", GetString(MSG_NO_WINDOW));
         DisposeObject(win_obj);
         return RETURN_FAIL;
     }
@@ -599,6 +693,8 @@ int main(void){
     close_class(LayoutBase,      ILayout);
     close_class(WindowBase,      IWindow);
     close_class(IntuitionBase,   IIntuition);
+    if (catalog != NULL) CloseCatalog(catalog);
+    close_class(LocaleBase,      ILocale);
 
     return RETURN_OK;
 }

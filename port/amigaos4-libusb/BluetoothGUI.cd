@@ -1,0 +1,97 @@
+; *********************************************************
+; Catalog description file for BluetoothGUI
+; $VER: BluetoothGUI.cd 1.0 (19.08.2025)
+; *********************************************************
+;
+MSG_WINDOW_TITLE (1000//64)
+Bluetooth Devices
+;
+MSG_NEARBY (//64)
+Nearby
+;
+MSG_KNOWN (//64)
+Known devices
+;
+MSG_CI_NAME (//32)
+Name
+;
+MSG_CI_ADDRESS (//32)
+Address
+;
+MSG_CI_SIGNAL (//32)
+Signal
+;
+MSG_CI_KIND (//32)
+Kind
+;
+MSG_CI_STATE (//32)
+State
+;
+MSG_BUTTON_SCAN (//32)
+_Scan
+;
+MSG_BUTTON_PAIR (//32)
+_Pair
+;
+MSG_BUTTON_CONNECT (//32)
+_Connect
+;
+MSG_BUTTON_DISCONNECT (//32)
+_Disconnect
+;
+MSG_BUTTON_FORGET (//32)
+_Forget
+;
+MSG_HINT_SCAN (//128)
+Look for devices that are not known yet
+;
+MSG_HINT_PAIR (//128)
+Pair with the selected device and start using it
+;
+MSG_HINT_CONNECT (//128)
+Connect to the selected device
+;
+MSG_HINT_DISCONNECT (//128)
+Disconnect the selected device, keeping it paired
+;
+MSG_HINT_FORGET (//128)
+Forget the selected device, so it has to be paired again
+;
+MSG_KIND_MOUSE (//32)
+Mouse
+;
+MSG_KIND_KEYBOARD (//32)
+Keyboard
+;
+MSG_KIND_GAMEPAD (//32)
+Gamepad
+;
+MSG_KIND_AUDIO (//32)
+Audio
+;
+MSG_KIND_SERIAL (//32)
+Serial
+;
+MSG_STATE_FOUND (//32)
+Found
+;
+MSG_STATE_PAIRED (//32)
+Paired
+;
+MSG_STATE_CONNECTING (//32)
+Connecting
+;
+MSG_STATE_CONNECTED (//32)
+Connected
+;
+MSG_STATE_IN_USE (//32)
+In use
+;
+MSG_NO_SERVICE (//128)
+BluetoothService is not running - start it first.
+;
+MSG_NO_CLASSES (//128)
+Cannot open the ReAction classes this needs.
+;
+MSG_NO_WINDOW (//128)
+Cannot open the window.
