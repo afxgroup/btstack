@@ -72,6 +72,11 @@ zstd -d rtl8761bu_fw.bin.zst -o rtl8761bu_fw
 zstd -d rtl8761bu_config.bin.zst -o rtl8761bu_config
 ```
 
+The `firmware/` folder here already holds them, extracted from `linux-firmware`
+and named the way BTstack asks for them - copy it to `SYS:Firmware/bt` and a
+Realtek dongle comes up without any of the above. See `firmware/README.md` for
+which parts are covered and which are not.
+
 They are searched for in this order, which matters for a service started by
 bt.usbfd - its current directory is `C:`, where they certainly are not:
 
