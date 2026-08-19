@@ -121,6 +121,32 @@ static bt_device_t * pending_device;
 static btstack_timer_source_t connection_timer;
 static btstack_timer_source_t retry_timer;
 static btstack_timer_source_t page_timer;
+
+/*
+ * How often to page a bonded Classic device that is not connected.
+ *
+ * A flat twenty seconds was both too slow to be pleasant and too fast to be
+ * free: every attempt at a device that is switched off costs a page timeout,
+ * 5.12 s during which the radio is doing nothing else, and it made no
+ * difference whether the keyboard had just been put down or had been in a
+ * drawer since yesterday.
+ *
+ * So start quickly and give up gradually. The interval doubles after each
+ * failure and is reset the moment anything happens that suggests the device is
+ * back - it connects, or something disconnects, or a client asks to scan. In
+ * practice that means a keyboard picked up again is reached in a few seconds,
+ * while one that is genuinely away is paged twice a minute rather than three
+ * times.
+ *
+ * The page timeout itself stays where it is. It looks like the obvious thing to
+ * shorten, but a device page scans in repetition mode R1 or R2 - up to 1.28 s or
+ * 2.56 s between scans - and paging for less than twice that risks missing a
+ * device that is awake and listening, which is the one case that must not fail.
+ */
+#define CLASSIC_RECONNECT_MIN_MS  4000
+#define CLASSIC_RECONNECT_MAX_MS 60000
+static uint32_t classic_reconnect_ms = CLASSIC_RECONNECT_MIN_MS;
+
 /* device we already asked gap_connect_cancel() for, used as a watchdog: see
  * connection_timeout_handler() */
 static bt_device_t * connection_cancel_pending_for;
@@ -562,6 +588,7 @@ static void handler_status(const bt_profile_handler_t * handler, const bd_addr_t
         device->handler   = handler;
         device->info.kind = handler->kind;
         btstack_strcpy(device->info.handler, sizeof(device->info.handler), device->handler->name);
+        classic_reconnect_ms = CLASSIC_RECONNECT_MIN_MS;
         device_set_state(device, BT_DEVICE_STATE_IN_USE);
         devices_forget_superseded(device);
         devices_store();
@@ -732,7 +759,6 @@ static void scan_resume_if_idle(void){
  * Retried on a slow tick rather than every inquiry round, since each attempt at
  * a device that is off costs a page timeout during which nothing else happens.
  */
-#define CLASSIC_RECONNECT_MS 20000
 
 static void classic_reconnect_bonded(void);
 
@@ -758,7 +784,7 @@ static void classic_reconnect_bonded(void){
     /* keep the tick going whatever happens this time round */
     btstack_run_loop_remove_timer(&page_timer);
     btstack_run_loop_set_timer_handler(&page_timer, &page_timer_handler);
-    btstack_run_loop_set_timer(&page_timer, CLASSIC_RECONNECT_MS);
+    btstack_run_loop_set_timer(&page_timer, (uint32_t) classic_reconnect_ms);
     btstack_run_loop_add_timer(&page_timer);
 
     if (pending_device != NULL)    return;
@@ -773,7 +799,13 @@ static void classic_reconnect_bonded(void){
         if (device->con_handle != HCI_CON_HANDLE_INVALID) continue;
         if (device->handler == NULL)  continue;
 
-        service_log("service: paging known device %s\n", bd_addr_to_str(device->info.bd_addr));
+        service_log("service: paging known device %s (next in %lus)\n",
+                    bd_addr_to_str(device->info.bd_addr),
+                    (unsigned long) (classic_reconnect_ms / 1000));
+        classic_reconnect_ms *= 2;
+        if (classic_reconnect_ms > CLASSIC_RECONNECT_MAX_MS){
+            classic_reconnect_ms = CLASSIC_RECONNECT_MAX_MS;
+        }
         device_connect(device);
         return;   /* one at a time - device_connect() refuses the rest anyway */
     }
@@ -1251,6 +1283,9 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
              * turns on. Dialling it now would just time out if it went to
              * sleep, blocking everything else meanwhile */
             if (device->autoconnect && !shutdown_requested){
+                /* something just went away, so it is probably nearby and about
+                 * to come back - start looking eagerly again */
+                classic_reconnect_ms = CLASSIC_RECONNECT_MIN_MS;
                 scan_start(true);
                 inquiry_start();   /* scan_start() only does this when it was idle */
             }
@@ -1355,7 +1390,8 @@ static bt_result_t handle_command(BTServiceMsg * msg){
             if (pending_device != NULL)     return BT_RESULT_BUSY;
             /* asked for explicitly, so look for Classic devices too even when
              * one is already bonded - this is how a second one gets added */
-            inquiry_requested = true;
+            inquiry_requested    = true;
+            classic_reconnect_ms = CLASSIC_RECONNECT_MIN_MS;
             scan_start(false);
             return BT_RESULT_OK;
 

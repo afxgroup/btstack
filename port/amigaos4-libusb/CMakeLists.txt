@@ -73,6 +73,7 @@ file(GLOB SOURCES_LIBUSB    "${CMAKE_SOURCE_DIR}/*.c")
 list(REMOVE_ITEM SOURCES_LIBUSB
     ${CMAKE_SOURCE_DIR}/bthid.c
     ${CMAKE_SOURCE_DIR}/bluetooth_service.c
+    ${CMAKE_SOURCE_DIR}/bluetooth_gui.c
 )
 file(GLOB SOURCES_ZEPHYR    "${BTSTACK_ROOT}/chipset/zephyr/*.c")
 file(GLOB SOURCES_REALTEK   "${BTSTACK_ROOT}/chipset/realtek/*.c")
