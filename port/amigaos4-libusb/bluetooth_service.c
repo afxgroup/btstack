@@ -421,9 +421,20 @@ static void device_attach_handler(bt_device_t * device){
 }
 
 /* called by a handler when it starts or stops driving a device */
-static void handler_status(hci_con_handle_t con_handle, bool in_use, uint8_t status){
-    bt_device_t * device = device_for_handle(con_handle);
-    if (device == NULL) return;
+static void handler_status(const bt_profile_handler_t * handler, const bd_addr_t addr,
+                           hci_con_handle_t con_handle, bool in_use, uint8_t status){
+    /*
+     * By address, not by handle. A Classic device that has been paired before
+     * reconnects by connecting to us, so the first the service hears of it is
+     * this call: there is no handle of ours to match, and the device may not be
+     * in the table at all yet.
+     */
+    bt_device_t * device = device_for_addr(addr);
+    if (device == NULL){
+        device = device_add(addr, 0xff);
+        if (device == NULL) return;
+        service_log("service: %s connected to us\n", bd_addr_to_str(addr));
+    }
 
     if (in_use){
         /* a Classic device connects through its handler, so this is where its
@@ -434,6 +445,10 @@ static void handler_status(hci_con_handle_t con_handle, bool in_use, uint8_t sta
         }
         device->con_handle  = con_handle;
         device->autoconnect = true;
+        /* the handler reporting is the one driving it - a device that connected
+         * to us was never probed, so there is nothing else to go on */
+        device->handler   = handler;
+        device->info.kind = handler->kind;
         btstack_strcpy(device->info.handler, sizeof(device->info.handler), device->handler->name);
         device_set_state(device, BT_DEVICE_STATE_IN_USE);
         devices_store();

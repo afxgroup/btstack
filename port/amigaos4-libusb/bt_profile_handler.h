@@ -30,7 +30,7 @@
 extern "C" {
 #endif
 
-typedef struct {
+typedef struct bt_profile_handler {
     /** short name, reported to clients in BTDeviceInfo.handler */
     const char * name;
 
@@ -87,16 +87,30 @@ typedef struct {
  * it worked. Without it an application has no way of knowing, which is how
  * bthid ended up sitting at "Search for HID service" forever.
  *
- * @param con_handle the connection
+ * The address identifies the device, not the connection handle: a Classic
+ * device that reconnects does so by connecting to us, and the service has no
+ * handle for it until this very call.
+ *
+ * The handler is passed too, because it is the authority on what is driving
+ * the device: a device that connected to us on its own was never probed, so
+ * there is nothing else to deduce it from.
+ *
+ * @param handler    the handler reporting
+ * @param addr       the device
+ * @param con_handle its connection
  * @param in_use     true when the handler is now driving it
  * @param status     ERROR_CODE_SUCCESS, or why it failed
  */
-typedef void (*bt_profile_status_callback_t)(hci_con_handle_t con_handle, bool in_use, uint8_t status);
+typedef void (*bt_profile_status_callback_t)(const struct bt_profile_handler * handler,
+                                             const bd_addr_t addr, hci_con_handle_t con_handle,
+                                             bool in_use, uint8_t status);
 
 void bt_profile_handler_set_status_callback(bt_profile_status_callback_t callback);
 
 /** @brief Called by the handlers themselves */
-void bt_profile_handler_report_status(hci_con_handle_t con_handle, bool in_use, uint8_t status);
+void bt_profile_handler_report_status(const struct bt_profile_handler * handler,
+                                      const bd_addr_t addr, hci_con_handle_t con_handle,
+                                      bool in_use, uint8_t status);
 
 /**
  * @brief The handlers built into the service, NULL terminated.

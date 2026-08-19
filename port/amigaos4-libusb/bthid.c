@@ -114,7 +114,10 @@ static bool verbose;
 
 /* the handler drives the device asynchronously, so this is where we learn
  * whether it actually took it over */
-static void handler_status(hci_con_handle_t con_handle, bool in_use, uint8_t status){
+static void handler_status(const bt_profile_handler_t * handler, const bd_addr_t addr,
+                           hci_con_handle_t con_handle, bool in_use, uint8_t status){
+    UNUSED(handler);
+    UNUSED(addr);
     UNUSED(con_handle);
     if (in_use){
         app_state = READY;

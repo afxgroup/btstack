@@ -30,9 +30,11 @@ void bt_profile_handler_set_status_callback(bt_profile_status_callback_t callbac
     status_callback = callback;
 }
 
-void bt_profile_handler_report_status(hci_con_handle_t con_handle, bool in_use, uint8_t status){
+void bt_profile_handler_report_status(const struct bt_profile_handler * handler,
+                                      const bd_addr_t addr, hci_con_handle_t con_handle,
+                                      bool in_use, uint8_t status){
     if (status_callback == NULL) return;
-    status_callback(con_handle, in_use, status);
+    status_callback(handler, addr, con_handle, in_use, status);
 }
 
 const bt_profile_handler_t ** bt_profile_handlers(void){

@@ -42,6 +42,7 @@ static uint8_t hid_descriptor_storage[500];
 static uint16_t            hids_cid;
 static hid_protocol_mode_t protocol_mode = HID_PROTOCOL_MODE_REPORT;
 static hci_con_handle_t    hid_con_handle = HCI_CON_HANDLE_INVALID;
+static bd_addr_t           hid_addr;
 
 void bt_handler_hid_set_verbose(bool enabled){
     bt_hid_report_set_verbose(enabled);
@@ -69,7 +70,8 @@ static void hid_gatt_event_handler(uint8_t packet_type, uint16_t channel, uint8_
                     DebugPrintF("hid: service connection failed, status 0x%02x\n", status);
                     hid_con_handle = HCI_CON_HANDLE_INVALID;
                 }
-                bt_profile_handler_report_status(hid_con_handle, status == ERROR_CODE_SUCCESS, status);
+                bt_profile_handler_report_status(&bt_handler_hid, hid_addr, hid_con_handle,
+                                                 status == ERROR_CODE_SUCCESS, status);
             }
             break;
 
@@ -80,7 +82,7 @@ static void hid_gatt_event_handler(uint8_t packet_type, uint16_t channel, uint8_
             {
                 hci_con_handle_t gone = hid_con_handle;
                 hid_con_handle = HCI_CON_HANDLE_INVALID;
-                bt_profile_handler_report_status(gone, false, ERROR_CODE_SUCCESS);
+                bt_profile_handler_report_status(&bt_handler_hid, hid_addr, gone, false, ERROR_CODE_SUCCESS);
             }
             break;
 
@@ -138,6 +140,13 @@ static uint8_t hid_handler_connect(hci_con_handle_t con_handle){
         return ERROR_CODE_COMMAND_DISALLOWED;
     }
     hid_con_handle = con_handle;
+    /* the LE connection already exists, so its address is known to the stack */
+    {
+        hci_connection_t * connection = hci_connection_for_handle(con_handle);
+        if (connection != NULL){
+            memcpy(hid_addr, connection->address, 6);
+        }
+    }
     return hids_host_connect(con_handle, hid_gatt_event_handler, protocol_mode, &hids_cid);
 }
 

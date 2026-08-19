@@ -38,6 +38,7 @@ static uint8_t hid_descriptor_storage[500];
 
 static uint16_t         hid_cid;
 static hci_con_handle_t hid_con_handle = HCI_CON_HANDLE_INVALID;
+static bd_addr_t        hid_addr;
 
 /* -------------------------------------------------------------------------- */
 
@@ -50,18 +51,51 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
 
     switch (hci_event_hid_meta_get_subevent_code(packet)){
 
+        case HID_SUBEVENT_INCOMING_CONNECTION: {
+            /*
+             * The keyboard is connecting to us, which is how a Classic device
+             * that has been paired before comes back: it is the one that
+             * initiates, we are merely discoverable.
+             *
+             * This has to be answered. hid_host has already created a
+             * connection object for it, and an unanswered one is not harmless -
+             * every outgoing hid_host_connect() to that address is refused with
+             * ERROR_CODE_COMMAND_DISALLOWED because a connection for it already
+             * exists. Ignoring the event therefore did not just miss the
+             * incoming connection, it blocked the outgoing one as well.
+             */
+            uint16_t incoming_cid = hid_subevent_incoming_connection_get_hid_cid(packet);
+            if (hid_subevent_incoming_connection_get_status(packet) != ERROR_CODE_SUCCESS){
+                DebugPrintF("hid classic: incoming connection refused by the stack\n");
+                hid_host_decline_connection(incoming_cid);
+                break;
+            }
+            if (hid_con_handle != HCI_CON_HANDLE_INVALID){
+                /* already driving one; a second would fight it for the pointer */
+                DebugPrintF("hid classic: declining a second incoming connection\n");
+                hid_host_decline_connection(incoming_cid);
+                break;
+            }
+            DebugPrintF("hid classic: incoming connection, accepting\n");
+            hid_cid = incoming_cid;
+            hid_host_accept_connection(incoming_cid, HID_PROTOCOL_MODE_REPORT);
+            break;
+        }
+
         case HID_SUBEVENT_CONNECTION_OPENED: {
             uint8_t status = hid_subevent_connection_opened_get_status(packet);
+            hid_subevent_connection_opened_get_bd_addr(packet, hid_addr);
             if (status != ERROR_CODE_SUCCESS){
                 DebugPrintF("hid classic: connection failed, status 0x%02x\n", status);
                 hid_con_handle = HCI_CON_HANDLE_INVALID;
-                bt_profile_handler_report_status(hid_con_handle, false, status);
+                bt_profile_handler_report_status(&bt_handler_hid_classic, hid_addr, HCI_CON_HANDLE_INVALID, false, status);
                 break;
             }
             hid_cid        = hid_subevent_connection_opened_get_hid_cid(packet);
             hid_con_handle = hid_subevent_connection_opened_get_con_handle(packet);
-            DebugPrintF("hid classic: connected, cid 0x%04x\n", hid_cid);
-            bt_profile_handler_report_status(hid_con_handle, true, ERROR_CODE_SUCCESS);
+            DebugPrintF("hid classic: connected to %s, cid 0x%04x\n",
+                        bd_addr_to_str(hid_addr), hid_cid);
+            bt_profile_handler_report_status(&bt_handler_hid_classic, hid_addr, hid_con_handle, true, ERROR_CODE_SUCCESS);
             break;
         }
 
@@ -89,7 +123,7 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
             hci_con_handle_t gone = hid_con_handle;
             hid_con_handle = HCI_CON_HANDLE_INVALID;
             hid_cid = 0;
-            bt_profile_handler_report_status(gone, false, ERROR_CODE_SUCCESS);
+            bt_profile_handler_report_status(&bt_handler_hid_classic, hid_addr, gone, false, ERROR_CODE_SUCCESS);
             break;
         }
 

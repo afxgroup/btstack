@@ -145,10 +145,62 @@ static BOOL bt_service_command(bt_command_t command)
 }
 
 /*
+ * Has the USB stack finished booting?
+ *
+ * Before that it is "prebooted": running on preloaded drivers, deliberately as
+ * if dos.library were not around - because it may not be. A dongle already
+ * plugged in at power on gets us called right there, and touching DOS at that
+ * point does not fail cleanly, it hangs the boot: the machine never reaches
+ * Workbench. Nothing here is urgent enough to justify that, and the attach is
+ * reported again once the stack fullboots.
+ */
+static BOOL usb_stack_fullbooted(void)
+{
+    struct Library     *USBSysBase;
+    struct MsgPort     *port;
+    struct IORequest   *ioreq;
+    struct USBSysIFace *IUSBSys;
+    uint32              fullbooted = FALSE;
+
+    /* usbsys is a device, so getting at its interface means an IORequest */
+    port = IExec->AllocSysObjectTags(ASOT_PORT, TAG_END);
+    if (port == NULL)
+        return FALSE;
+
+    ioreq = IExec->AllocSysObjectTags(ASOT_IOREQUEST,
+                                      ASOIOR_Size,      sizeof(struct IOStdReq),
+                                      ASOIOR_ReplyPort, port,
+                                      TAG_END);
+    if (ioreq == NULL)
+    {
+        IExec->FreeSysObject(ASOT_PORT, port);
+        return FALSE;
+    }
+
+    if (IExec->OpenDevice("usbsys.device", 0, ioreq, 0) == 0)
+    {
+        USBSysBase = (struct Library *)ioreq->io_Device;
+        IUSBSys = (struct USBSysIFace *)IExec->GetInterface(USBSysBase, "main", 1, NULL);
+        if (IUSBSys)
+        {
+            IUSBSys->USBGetStackAttrs(USBA_Stack_Fullbooted, &fullbooted, TAG_END);
+            IExec->DropInterface((struct Interface *)IUSBSys);
+        }
+        IExec->CloseDevice(ioreq);
+    }
+
+    IExec->FreeSysObject(ASOT_IOREQUEST, ioreq);
+    IExec->FreeSysObject(ASOT_PORT, port);
+
+    return fullbooted ? TRUE : FALSE;
+}
+
+/*
  * Start the service if it is not running yet.
  *
  * Started detached with SystemTags(): a function driver must not wait for a
- * program to finish, and the service outlives us anyway.
+ * program to finish, and the service outlives us anyway. Only ever called once
+ * usb_stack_fullbooted() says there is a DOS to start it with.
  */
 static void bt_service_start(void)
 {
@@ -201,6 +253,17 @@ int fdmain(struct USBFDStartupMsg *startmsg)
     struct USBBusIntDsc *descriptor = (struct USBBusIntDsc *)startmsg->Descriptor;
 
     (void)descriptor;
+
+    /*
+     * Do nothing at all until the USB stack has fullbooted. With a dongle
+     * plugged in at power on we are called during the prebooted phase, where
+     * dos.library may not exist yet - and starting a process there hangs the
+     * boot before Workbench ever appears. The stack calls us again for the same
+     * device once it has fullbooted, which is when there is a system to run the
+     * service on.
+     */
+    if (usb_stack_fullbooted() == FALSE)
+        return USBERR_NOERROR;
 
     /*
      * Attach: make sure the service is up, then tell it a controller is there.
