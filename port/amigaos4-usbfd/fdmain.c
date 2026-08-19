@@ -18,8 +18,6 @@
  * itself. We only ask for the attach/detach notification.
  */
 
-#include <string.h>
-
 #include <usb/usb.h>
 #include <usb/devclasses.h>
 #include <usb/system.h>
@@ -48,6 +46,21 @@ extern struct USBResourceIFace *IUSBResource;
 #define BLUETOOTH_SERVICE_COMMAND "C:BluetoothService"
 
 static APTR MyFDKey;
+
+/*
+ * Zero a block, so this driver needs no C runtime at all.
+ *
+ * A single memset() was the only libc call in here, and it cost an
+ * OpenLibrary("clib4.library") in libInit - which pulls in bsdsocket.library
+ * behind it. A function driver is initialised at the very start of the boot,
+ * long before that is a reasonable thing to ask for, and it is where the boot
+ * stopped. Nothing else here needs a C library, so now nothing opens one.
+ */
+static void bt_zero(APTR block, uint32 size)
+{
+    uint8 *p = (uint8 *)block;
+    while (size--) *p++ = 0;
+}
 
 /* -------------------------------------------------------------------------- */
 
@@ -115,7 +128,7 @@ static BOOL bt_service_command(bt_command_t command)
     if (reply_port == NULL)
         return FALSE;
 
-    memset(&msg, 0, sizeof(msg));
+    bt_zero(&msg, sizeof(msg));
     msg.bsm_Message.mn_ReplyPort = reply_port;
     msg.bsm_Message.mn_Length    = sizeof(msg);
     msg.bsm_Version              = BLUETOOTH_SERVICE_VERSION;

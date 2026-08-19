@@ -9,7 +9,7 @@ TARGET = bt.usbfd
 
 CC      = ppc-amigaos-gcc
 STRIP   = ppc-amigaos-strip
-CRT    ?= clib4
+CRT    ?= newlib
 
 CFLAGS  = -mcrt=$(CRT) -mstrict-align -Wall -Wwrite-strings \
           -O3 -fomit-frame-pointer \

@@ -33,13 +33,8 @@ struct BTFDLibrary
 
 /* Global interfaces */
 struct ExecIFace       *IExec;
-#ifdef NEWLIB
 struct Library         *NewlibBase;
 struct Interface       *INewlib;
-#else
-struct Library         *Clib4Base;
-struct Interface       *IClib4;
-#endif
 struct Library         *UtilityBase;
 struct UtilityIFace    *IUtility;
 struct USBResourceIFace *IUSBResource;
@@ -104,17 +99,6 @@ static BPTR libExpunge(struct LibraryManagerInterface *Self)
             IUtility = NULL;
         }
 
-#ifdef NEWLIB
-        IExec->DropInterface(INewlib);
-        INewlib = NULL;
-        IExec->CloseLibrary(NewlibBase);
-        NewlibBase = NULL;
-#else
-        IExec->DropInterface(IClib4);
-        IClib4 = NULL;
-        IExec->CloseLibrary(Clib4Base);
-        Clib4Base = NULL;
-#endif
 
         IExec->Remove((struct Node *)libBase);
         IExec->DeleteLibrary(&libBase->LibNode);
@@ -132,20 +116,18 @@ static struct Library *libInit(struct BTFDLibrary *libBase, BPTR seglist, struct
 {
     IExec = (struct ExecIFace *)exec;
 
-#ifdef NEWLIB
+    IExec->DebugPrintF("[bt.usbfd] libInit: entered\n");
+
     NewlibBase = IExec->OpenLibrary("newlib.library", 53);
     if (NewlibBase)
         INewlib = IExec->GetInterface(NewlibBase, "main", 1, NULL);
 
     if (INewlib == NULL)
+    {
+        IExec->DebugPrintF("[bt.usbfd] libInit: no newlib\n");
         return NULL;
-#else
-    Clib4Base = IExec->OpenLibrary("clib4.library", 2);
-    if (Clib4Base)
-        IClib4 = IExec->GetInterface(Clib4Base, "main", 1, NULL);
-    if (IClib4 == NULL)
-        return NULL;
-#endif
+    }
+    IExec->DebugPrintF("[bt.usbfd] libInit: newlib open\n");
 
     libBase->LibNode.lib_Node.ln_Type = NT_LIBRARY;
     libBase->LibNode.lib_Node.ln_Pri  = 0;
@@ -157,6 +139,7 @@ static struct Library *libInit(struct BTFDLibrary *libBase, BPTR seglist, struct
 
     libBase->SegList = seglist;
 
+    IExec->DebugPrintF("[bt.usbfd] libInit: opening utility.library\n");
     UtilityBase = IExec->OpenLibrary("utility.library", 50);
     if (UtilityBase)
         IUtility = (struct UtilityIFace *)IExec->GetInterface(UtilityBase, "main", 1, NULL);
@@ -164,6 +147,7 @@ static struct Library *libInit(struct BTFDLibrary *libBase, BPTR seglist, struct
     if (IUtility == NULL)
         goto fail;
 
+    IExec->DebugPrintF("[bt.usbfd] libInit: opening usbresource.library\n");
     USBResourceBase = IExec->OpenLibrary("usbresource.library", 53);
     if (USBResourceBase)
         IUSBResource = (struct USBResourceIFace *)IExec->GetInterface(USBResourceBase, "main", 1, NULL);
@@ -171,8 +155,13 @@ static struct Library *libInit(struct BTFDLibrary *libBase, BPTR seglist, struct
     if (IUSBResource == NULL)
         goto fail;
 
+    IExec->DebugPrintF("[bt.usbfd] libInit: registering\n");
     if (fdmain_register())
+    {
+        IExec->DebugPrintF("[bt.usbfd] libInit: done\n");
         return &libBase->LibNode;
+    }
+    IExec->DebugPrintF("[bt.usbfd] libInit: registration failed\n");
 
 fail:
     if (USBResourceBase)
@@ -191,17 +180,6 @@ fail:
         IUtility = NULL;
     }
 
-#ifdef NEWLIB
-    IExec->DropInterface(INewlib);
-    INewlib = NULL;
-    IExec->CloseLibrary(NewlibBase);
-    NewlibBase = NULL;
-#else
-    IExec->DropInterface(IClib4);
-    IClib4 = NULL;
-    IExec->CloseLibrary(Clib4Base);
-    Clib4Base = NULL;
-#endif
 
     return NULL;
 }
