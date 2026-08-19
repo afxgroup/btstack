@@ -308,6 +308,7 @@ static bt_result_t   device_connect(bt_device_t * device);
 static void          scan_start(bool autoconnect);
 static void          scan_resume_if_idle(void);
 static void          devices_store(void);
+static void          devices_forget_superseded(const bt_device_t * keep);
 static void          connection_timeout_handler(btstack_timer_source_t * ts);
 static void          inquiry_start(void);
 static void          inquiry_stop(void);
@@ -562,6 +563,7 @@ static void handler_status(const bt_profile_handler_t * handler, const bd_addr_t
         device->info.kind = handler->kind;
         btstack_strcpy(device->info.handler, sizeof(device->info.handler), device->handler->name);
         device_set_state(device, BT_DEVICE_STATE_IN_USE);
+        devices_forget_superseded(device);
         devices_store();
         service_log("service: %s in use by handler '%s'\n",
                     bd_addr_to_str(device->info.bd_addr), device->info.handler);
@@ -603,6 +605,50 @@ static void handler_status(const bt_profile_handler_t * handler, const bd_addr_t
 
 /* -------------------------------------------------------------------------- */
 /* known devices                                                              */
+
+/*
+ * Drop older entries for a device that has come back under a new address.
+ *
+ * This mouse gives itself a different address every time it is switched on -
+ * 13:08:AC:00:00:83, then ...01:E3, then ...02:54 - so every boot added another
+ * bonded ATL-MU55 to a list that never lost one. Address resolution is no help:
+ * the top two bits of the first byte are 00, which makes these non-resolvable
+ * private addresses, random by definition and not derivable from an IRK.
+ *
+ * The name is the only handle such a device offers, so a bonded device with the
+ * same name and kind is taken to be the same device, and the older entry goes -
+ * along with its bonding, which is dead weight in the controller's list once the
+ * address it belongs to will never appear again.
+ *
+ * Only devices with a name are considered, and only against another bonded one:
+ * two nameless devices are not evidence of anything.
+ */
+static void devices_forget_superseded(const bt_device_t * keep){
+    if (keep->info.name[0] == 0) return;
+
+    uint8_t i;
+    for (i = 0; i < MAX_DEVICES; i++){
+        bt_device_t * device = &devices[i];
+        if (device == keep)          continue;
+        if (!device->in_use)         continue;
+        if (!device->autoconnect)    continue;
+        if (device->info.kind != keep->info.kind) continue;
+        if (strcmp(device->info.name, keep->info.name) != 0) continue;
+        if (device->con_handle != HCI_CON_HANDLE_INVALID) continue;
+
+        service_log("service: %s superseded by %s, forgetting it\n",
+                    bd_addr_to_str(device->info.bd_addr),
+                    bd_addr_to_str(keep->info.bd_addr));
+
+        if (device->info.addr_type == 0xff){
+            gap_drop_link_key_for_bd_addr(device->info.bd_addr);
+        } else {
+            gap_delete_bonding((bd_addr_type_t) device->info.addr_type, device->info.bd_addr);
+        }
+        bt_service_port_notify(BTEVENT_DEVICE_REMOVED, &device->info, 0);
+        memset(device, 0, sizeof(bt_device_t));
+    }
+}
 
 static void devices_store(void){
     if (tlv_impl == NULL) return;

@@ -57,6 +57,7 @@ void bt_hid_report_set_verbose(bool enabled){
 static uint8_t  keys_down[MAX_KEYS_DOWN];
 static uint8_t  keys_down_count;
 static uint8_t  modifiers_down;      /* bit per HID usage 0xE0..0xE7 */
+static bool     baseline_taken;      /* the first report only records state */
 
 static uint16_t keyboard_qualifier(void){
     uint16_t qualifier = 0;
@@ -92,6 +93,29 @@ static void keyboard_send(uint8_t usage, bool pressed){
 static void keyboard_handle_report(const uint8_t * new_keys, uint8_t new_count, uint8_t new_modifiers){
 
     uint8_t i, j;
+
+    /*
+     * Take the first report after connecting as the baseline, without acting on
+     * it.
+     *
+     * A keyboard reports what is held right now, and at the moment it connects
+     * we have no idea what that is - nobody was watching. This one latches a
+     * modifier when the link drops and hands it straight back as held on the
+     * next connection, so every restart began with Ctrl down system wide until
+     * the key was pressed and released to clear it.
+     *
+     * Injecting a modifier the user never pressed is worse than missing one
+     * they are holding: the first costs every keystroke afterwards, the second
+     * costs pressing the key again. So the state at connection time is recorded
+     * and nothing is sent until it changes.
+     */
+    if (!baseline_taken){
+        baseline_taken = true;
+        modifiers_down = new_modifiers;
+        if (new_modifiers != 0){
+            log_info("hid: %02x held at connection, ignored until it changes", new_modifiers);
+        }
+    }
 
     /* modifiers first: a shift has to be down before the key it applies to */
     uint8_t changed = modifiers_down ^ new_modifiers;
@@ -142,6 +166,7 @@ static void keyboard_release_all(void){
         amigaos4_input_key(bt_hid_modifier_keymap[i], false, keyboard_qualifier());
     }
     modifiers_down = 0;
+    baseline_taken = false;
 }
 
 /**
