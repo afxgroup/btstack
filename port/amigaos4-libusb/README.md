@@ -172,6 +172,17 @@ and is what there is to manage: connect, disconnect, or forget.
 Scan also restarts the Classic inquiry, which the service stops by itself once
 everything it knows is connected - so it is the way to add a second keyboard.
 
+Buttons that act on a selection are disabled while there is none. Scan is not:
+it acts on nothing in particular.
+
+It is localised. `BluetoothGUI.cd` describes the strings for translators and
+`bluetooth_gui_cat.h` holds the IDs with their English text in the shape CatComp
+produces - written by hand because CatComp is an Amiga tool and this cross builds
+on a host without one, but laid out so a real CatComp run over the `.cd` drops
+straight in. The built-in text is the fallback handed to `GetCatalogStr()`, so
+everything reads correctly with no catalog installed, with one that does not
+cover a string, or with no locale.library at all.
+
 ## Bluetooth Classic keyboards
 
 Four things are needed to keep one connected, and none of them is obvious.

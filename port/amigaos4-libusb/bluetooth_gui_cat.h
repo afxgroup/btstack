@@ -46,6 +46,7 @@
 #define MSG_NO_SERVICE           1028
 #define MSG_NO_CLASSES           1029
 #define MSG_NO_WINDOW            1030
+#define MSG_NO_NAME              1031
 
 #define MSG_WINDOW_TITLE_STR         "Bluetooth Devices"
 #define MSG_NEARBY_STR               "Nearby"
@@ -78,6 +79,7 @@
 #define MSG_NO_SERVICE_STR           "BluetoothService is not running - start it first."
 #define MSG_NO_CLASSES_STR           "Cannot open the ReAction classes this needs."
 #define MSG_NO_WINDOW_STR            "Cannot open the window."
+#define MSG_NO_NAME_STR              "(no name)"
 
 struct CatCompArrayType {
     LONG   cca_ID;
@@ -116,6 +118,7 @@ static const struct CatCompArrayType CatCompArray[] = {
     { MSG_NO_SERVICE,          (STRPTR) MSG_NO_SERVICE_STR },
     { MSG_NO_CLASSES,          (STRPTR) MSG_NO_CLASSES_STR },
     { MSG_NO_WINDOW,           (STRPTR) MSG_NO_WINDOW_STR },
+    { MSG_NO_NAME,             (STRPTR) MSG_NO_NAME_STR },
 };
 
 #define CATCOMP_ARRAY_SIZE (sizeof(CatCompArray) / sizeof(CatCompArray[0]))

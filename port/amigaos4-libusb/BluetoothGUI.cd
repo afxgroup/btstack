@@ -95,3 +95,6 @@ Cannot open the ReAction classes this needs.
 ;
 MSG_NO_WINDOW (//128)
 Cannot open the window.
+;
+MSG_NO_NAME (//32)
+(no name)

@@ -256,6 +256,11 @@ static const char * state_name(bt_device_state_t state){
     }
 }
 
+/* most LE devices advertise no name at all, and an empty row looks broken */
+static const char * name_or_unknown(const char * name){
+    return (name[0] != 0) ? name : (const char *) GetString(MSG_NO_NAME);
+}
+
 static void addr_to_str(const uint8 * addr, char * out){
     sprintf(out, "%02X:%02X:%02X:%02X:%02X:%02X",
             addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
@@ -278,9 +283,15 @@ static Object * win_obj;
 static Object * gad_nearby;
 static Object * gad_known;
 static Object * gad_scan;
+static Object * gad_pair;
+static Object * gad_connect;
+static Object * gad_disconnect;
+static Object * gad_forget;
 static struct Window * window;
 
 /* the listbrowser must not be looking at a list while it is being rebuilt */
+static int32 selected_row(Object * gadget);
+
 static void list_detach(Object * gadget, struct List * list){
     SetGadgetAttrs((struct Gadget *) gadget, window, NULL,
                                LISTBROWSER_Labels, NULL, TAG_END);
@@ -303,12 +314,21 @@ static void nearby_show(void){
         addr_to_str(nearby[i].bd_addr, address);
         sprintf(rssi, "%d dBm", nearby[i].rssi);
 
+        /*
+         * One flat taglist, ended once.
+         *
+         * There is no TAG_END between the columns: putting one there ends the
+         * list at the first column, and every column after it silently keeps
+         * whatever it had - which is why this list came up with rows in it and
+         * nothing written in them, while the other showed names and no
+         * addresses.
+         */
         struct Node * node = AllocListBrowserNode(4,
-            LBNA_Column, 0, LBNCA_CopyText, TRUE, LBNCA_Text, nearby[i].name, TAG_END,
-            LBNA_Column, 1, LBNCA_CopyText, TRUE, LBNCA_Text, address, TAG_END,
-            LBNA_Column, 2, LBNCA_CopyText, TRUE, LBNCA_Text, rssi, TAG_END,
-            LBNA_Column, 3, LBNCA_CopyText, TRUE, LBNCA_Text, kind_name(nearby[i].kind), TAG_END,
-            TAG_END);
+            LBNA_Column, 0, LBNCA_CopyText, TRUE, LBNCA_Text, name_or_unknown(nearby[i].name),
+            LBNA_Column, 1, LBNCA_CopyText, TRUE, LBNCA_Text, address,
+            LBNA_Column, 2, LBNCA_CopyText, TRUE, LBNCA_Text, rssi,
+            LBNA_Column, 3, LBNCA_CopyText, TRUE, LBNCA_Text, kind_name(nearby[i].kind),
+            TAG_DONE);
         if (node != NULL) AddTail(&nearby_labels, node);
     }
 
@@ -325,15 +345,37 @@ static void known_show(void){
         addr_to_str(known[i].bd_addr, address);
 
         struct Node * node = AllocListBrowserNode(4,
-            LBNA_Column, 0, LBNCA_CopyText, TRUE, LBNCA_Text, known[i].name, TAG_END,
-            LBNA_Column, 1, LBNCA_CopyText, TRUE, LBNCA_Text, address, TAG_END,
-            LBNA_Column, 2, LBNCA_CopyText, TRUE, LBNCA_Text, kind_name(known[i].kind), TAG_END,
-            LBNA_Column, 3, LBNCA_CopyText, TRUE, LBNCA_Text, state_name(known[i].state), TAG_END,
-            TAG_END);
+            LBNA_Column, 0, LBNCA_CopyText, TRUE, LBNCA_Text, name_or_unknown(known[i].name),
+            LBNA_Column, 1, LBNCA_CopyText, TRUE, LBNCA_Text, address,
+            LBNA_Column, 2, LBNCA_CopyText, TRUE, LBNCA_Text, kind_name(known[i].kind),
+            LBNA_Column, 3, LBNCA_CopyText, TRUE, LBNCA_Text, state_name(known[i].state),
+            TAG_DONE);
         if (node != NULL) AddTail(&known_labels, node);
     }
 
     list_attach(gad_known, &known_labels);
+}
+
+/*
+ * A button that acts on a selection is off while there is none.
+ *
+ * Every one of these needs a device, so with nothing selected there is nothing
+ * for them to do and pressing them could only be a mistake. Scan is the
+ * exception and stays live: it acts on nothing in particular.
+ *
+ * Called after anything that can change either the selection or the lists,
+ * since rebuilding a list drops the selection with it.
+ */
+static void buttons_update(void){
+    if (window == NULL) return;
+
+    BOOL nearby_off = (selected_row(gad_nearby) < 0) ? TRUE : FALSE;
+    BOOL known_off  = (selected_row(gad_known)  < 0) ? TRUE : FALSE;
+
+    SetGadgetAttrs((struct Gadget *) gad_pair,       window, NULL, GA_Disabled, nearby_off, TAG_DONE);
+    SetGadgetAttrs((struct Gadget *) gad_connect,    window, NULL, GA_Disabled, known_off,  TAG_DONE);
+    SetGadgetAttrs((struct Gadget *) gad_disconnect, window, NULL, GA_Disabled, known_off,  TAG_DONE);
+    SetGadgetAttrs((struct Gadget *) gad_forget,     window, NULL, GA_Disabled, known_off,  TAG_DONE);
 }
 
 /* which row is selected, or -1 */
@@ -476,7 +518,7 @@ int main(void){
                 LAYOUT_AddChild, HLayoutObject,
                     LAYOUT_EvenSize, TRUE,
                     LAYOUT_AddChild, gad_scan,
-                    LAYOUT_AddChild, ButtonObject,
+                    LAYOUT_AddChild, gad_pair = ButtonObject,
                         GA_ID,        GID_PAIR,
                         GA_RelVerify, TRUE,
                         GA_Text,      GetString(MSG_BUTTON_PAIR),
@@ -495,19 +537,19 @@ int main(void){
 
                 LAYOUT_AddChild, HLayoutObject,
                     LAYOUT_EvenSize, TRUE,
-                    LAYOUT_AddChild, ButtonObject,
+                    LAYOUT_AddChild, gad_connect = ButtonObject,
                         GA_ID,        GID_CONNECT,
                         GA_RelVerify, TRUE,
                         GA_Text,      GetString(MSG_BUTTON_CONNECT),
                         GA_HintInfo,  GetString(MSG_HINT_CONNECT),
                     End,
-                    LAYOUT_AddChild, ButtonObject,
+                    LAYOUT_AddChild, gad_disconnect = ButtonObject,
                         GA_ID,        GID_DISCONNECT,
                         GA_RelVerify, TRUE,
                         GA_Text,      GetString(MSG_BUTTON_DISCONNECT),
                         GA_HintInfo,  GetString(MSG_HINT_DISCONNECT),
                     End,
-                    LAYOUT_AddChild, ButtonObject,
+                    LAYOUT_AddChild, gad_forget = ButtonObject,
                         GA_ID,        GID_FORGET,
                         GA_RelVerify, TRUE,
                         GA_Text,      GetString(MSG_BUTTON_FORGET),
@@ -535,6 +577,7 @@ int main(void){
     subscribed = bt_command(BTCMD_SUBSCRIBE_EVENTS, NULL, 0, NULL, 0, NULL) == BT_RESULT_OK;
     known_refresh();
     known_show();
+    buttons_update();
 
     uint32 window_sig = 0;
     GetAttr(WINDOW_SigMask, win_obj, &window_sig);
@@ -583,6 +626,7 @@ int main(void){
                 known_refresh();
                 known_show();
             }
+            if (refresh_nearby || refresh_known) buttons_update();
         }
 
         if (signals & window_sig){
@@ -607,6 +651,11 @@ int main(void){
 
                     case WMHI_GADGETUP:
                         switch (result & WMHI_GADGETMASK){
+
+                            case GID_NEARBY:
+                            case GID_KNOWN:
+                                buttons_update();
+                                break;
 
                             case GID_SCAN:
                                 /* asking to scan also makes the service look for
@@ -650,6 +699,7 @@ int main(void){
                                     known_refresh();
                                     known_show();
                                 }
+                                buttons_update();
                                 break;
                             }
 
