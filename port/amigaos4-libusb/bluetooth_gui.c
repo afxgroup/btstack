@@ -737,7 +737,7 @@ int main(void){
                         refresh_known = true;
                         break;
                 }
-                ReplyMsg(&event->bse_Message);
+                FreeSysObject(ASOT_MESSAGE, event);
             }
 
             if (refresh_nearby) nearby_show();
@@ -852,14 +852,13 @@ int main(void){
     }
 
     /*
-     * Reply anything that arrived between unsubscribing and now. The service
-     * drops a subscriber that stops replying, but a message still owned by us
-     * when this exits is one it can never free.
+     * Anything that arrived between unsubscribing and now is ours to free -
+     * events are one way and the service has already forgotten them.
      */
     {
         struct Message * message;
         while ((message = GetMsg(event_port)) != NULL){
-            ReplyMsg(message);
+            FreeSysObject(ASOT_MESSAGE, message);
         }
     }
 

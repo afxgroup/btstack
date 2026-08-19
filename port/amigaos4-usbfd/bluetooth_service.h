@@ -26,7 +26,7 @@
 #include <exec/ports.h>
 
 #define BLUETOOTH_SERVICE_PORT_NAME "bluetooth.service"
-#define BLUETOOTH_SERVICE_VERSION   1
+#define BLUETOOTH_SERVICE_VERSION   2
 
 /* how the service was asked to behave with a device */
 typedef enum {
@@ -121,8 +121,21 @@ typedef struct {
 
 /*
  * Sent by the service to subscribers when something changes, so a GUI can show
- * live state without polling. The service allocates these and the subscriber
- * replies them; a subscriber that stops replying is dropped.
+ * live state without polling.
+ *
+ * One way: the service allocates the message and the subscriber frees it with
+ * FreeSysObject(ASOT_MESSAGE, ...). It is deliberately not replied, and carries
+ * no reply port to reply to.
+ *
+ * These used to be replied to the service's own public port, which crashed any
+ * subscriber that was holding one when the service stopped: the service frees
+ * that port on the way out, so the reply went to memory that was gone, and
+ * nothing the subscriber could check would have told it. Leaving the port
+ * allocated would not have helped either - replying signals the task that owns
+ * it, and by then that task has exited.
+ *
+ * The cost is that a subscriber which dies holding messages leaks them, which
+ * is a few hundred bytes against a crash.
  */
 typedef enum {
     BTEVENT_DEVICE_FOUND = 0,

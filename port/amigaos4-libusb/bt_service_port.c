@@ -58,9 +58,9 @@ static void bt_service_port_process(btstack_data_source_t * ds, btstack_data_sou
     while ((message = GetMsg(service_port)) != NULL){
 
         /*
-         * Two kinds of message arrive here: commands from clients, and the
-         * event messages we sent to subscribers coming back. ReplyMsg() marks
-         * the latter as NT_REPLYMSG, which is how they are told apart.
+         * Events are one way now and never come back, so anything marked
+         * NT_REPLYMSG is from a client built against the old protocol. Freeing
+         * it is all that can be done with it.
          */
         if (message->mn_Node.ln_Type == NT_REPLYMSG){
             FreeSysObject(ASOT_MESSAGE, message);
@@ -152,9 +152,10 @@ void bt_service_port_close(void){
     Permit();
 
     /*
-     * Note: an event message still held by a subscriber is leaked here. Waiting
-     * for it would hang shutdown on a client that is not answering, which is
-     * the worse trade - a few hundred bytes against a service that cannot exit.
+     * An event message still held by a subscriber is leaked, which is what the
+     * one way protocol trades for being safe: waiting for it would hang
+     * shutdown on a client that is not answering, and freeing the port with
+     * replies outstanding is what used to crash them.
      */
 
     SetSignal(0, 1UL << service_port->mp_SigBit);
@@ -198,12 +199,15 @@ void bt_service_port_notify(bt_event_t event, const BTDeviceInfo * device, uint3
         if (subscribers[i] == NULL) continue;
 
         /*
-         * One message per subscriber, allocated by us and replied by them. It
-         * is freed when it comes back, in bt_service_port_collect_replies().
+         * One message per subscriber, allocated by us and freed by them.
+         *
+         * No reply port, deliberately. These used to come back to our own
+         * public port, which we free when the service stops - so a subscriber
+         * still holding one replied into memory that was gone and took itself
+         * down with it. Nothing it could have checked would have saved it.
          */
         BTServiceEvent * ev = AllocSysObjectTags(ASOT_MESSAGE,
-                                                 ASOMSG_Size,      sizeof(BTServiceEvent),
-                                                 ASOMSG_ReplyPort, bt_service_port_get(),
+                                                 ASOMSG_Size, sizeof(BTServiceEvent),
                                                  TAG_END);
         if (ev == NULL) return;
 
