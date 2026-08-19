@@ -79,6 +79,26 @@ typedef struct {
  * the timer when a pairing event proves someone is at the keyboard.
  */
 #define CONNECTION_TIMEOUT_CLASSIC_MS 15000
+
+/*
+ * How long the controller itself pages before giving up.
+ *
+ * BTstack defaults to 0x6000, about 15.36 s, which lands just after the 15 s
+ * watchdog above - so the watchdog always won by a third of a second, and we
+ * walked away from an attempt the controller was still busy with. It went on
+ * paging a keyboard that was not there, and everything queued behind it: the
+ * mouse advertised, we called gap_connect(), and it sat at "connecting" while
+ * the radio was still occupied.
+ *
+ * Set it well below the watchdog and the ordering is the right way round. A
+ * page that fails is then reported through the normal path, as a connection
+ * opened with a non-zero status, which is handled properly and clears the
+ * attempt; the watchdog goes back to being what it should be, a backstop for
+ * the case where nothing is reported at all.
+ *
+ * 0x2000 is about 5.12 s, which is long enough to reach a device that is awake.
+ */
+#define PAGE_TIMEOUT_SLOTS 0x2000
 #define CONNECTION_TIMEOUT_PAIRING_MS 60000
 
 typedef struct {
@@ -1315,6 +1335,7 @@ int btstack_main(int argc, const char * argv[]){
      * user types it on the keyboard and presses Enter.
      */
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_DISPLAY_ONLY);
+    gap_set_page_timeout(PAGE_TIMEOUT_SLOTS);
 
     /* no ATT server: we are a central, and running one opens a re-entrancy in
      * att_server that recurses until the stack overflows. See bthid.c. */
