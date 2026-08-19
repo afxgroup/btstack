@@ -1,0 +1,212 @@
+================================================================================
+                       Bluetooth for AmigaOS 4
+                    BTstack port, libusb-1.library
+================================================================================
+
+WHAT THIS IS
+
+  A Bluetooth stack for AmigaOS 4, built on BTstack and talking to the
+  controller through libusb-1.library. It lets a Bluetooth mouse and keyboard
+  drive the machine as if they were plugged in: the pointer moves for the whole
+  system and keys reach every application, because the events go into
+  input.device rather than into any one program.
+
+  Three parts, each doing one job.
+
+    BluetoothService   the stack itself, running as a background process
+    BluetoothGUI       a window for managing devices
+    bt.usbfd           a USB function driver that starts the service when a
+                       controller is plugged in
+
+  Plus bthid, a smaller program that drives a single LE device without the
+  service, kept because it is useful for testing.
+
+
+--------------------------------------------------------------------------------
+REQUIREMENTS
+--------------------------------------------------------------------------------
+
+  AmigaOS 4.1
+  A USB Bluetooth controller. Realtek parts are the best tested; the firmware
+    for many of them ships with this archive.
+  libusb-1.library
+
+  Firmware matters more than it sounds. A Realtek controller holds none of its
+  own and is given it at every startup - without it the controller comes up,
+  answers commands, and finds nothing at all. It scans for a minute and reports
+  not one device, which looks like broken hardware and is not.
+
+
+--------------------------------------------------------------------------------
+GETTING STARTED
+--------------------------------------------------------------------------------
+
+  Plug the controller in. If bt.usbfd is installed the service starts by
+  itself; otherwise run BluetoothService from a Shell.
+
+  Start BluetoothGUI, give the machine a name, and press Scan. Put the device
+  into pairing mode - most have a button for it, held for a few seconds - and
+  when it appears in the top list, select it and press Pair.
+
+  Once paired it reconnects on its own from then on, and there is nothing to do
+  at each startup.
+
+
+--------------------------------------------------------------------------------
+BluetoothService
+--------------------------------------------------------------------------------
+
+  The stack. It owns the controller, keeps the list of known devices, and feeds
+  what they send into input.device.
+
+    BluetoothService [-v] [-l FILE] [-f FOLDER] [-p] [-d VID:PID]
+                     [--secure-only] [--forget-all]
+
+    -v              log every advertisement and every decoded report
+    -l FILE         write a packet log, readable in Wireshark
+    -f FOLDER       where to look for controller firmware
+    -p              accept LE Legacy Pairing (many mice need this)
+    -d VID:PID      use this USB device rather than searching
+    --secure-only   require LE Secure Connections, refusing legacy pairing
+    --forget-all    start with no bonds at all, so everything pairs afresh
+
+  It publishes a message port called "bluetooth.service". BluetoothGUI is a
+  client of that port and nothing more; anything else could be too.
+
+  CTRL-C stops it: the first powers Bluetooth down and shuts it cleanly, a
+  second forces it. Held keys and mouse buttons are always released on the way
+  out, so nothing can be left stuck for the whole system.
+
+  Where it keeps things:
+
+    ENVARC:Bluetooth/btstack_<address>.tlv    bonds and known devices
+    SYS:Firmware/bt/                          controller firmware
+
+  When to use --forget-all. A device held in pairing mode is waiting to create
+  a new bond and will not settle for being authenticated with the key from an
+  old one: it accepts the connection, never finishes its own pairing, and drops
+  the link when its pairing window closes. If a device pairs and then
+  disconnects a minute later, a stale key is the likely reason and this clears
+  it.
+
+
+--------------------------------------------------------------------------------
+BluetoothGUI
+--------------------------------------------------------------------------------
+
+  Two lists, answering two different questions.
+
+  Nearby is what is being heard from right now. It fills as devices are seen
+  and changes constantly - this is where a device appears when you put it in
+  pairing mode. Select one and press Pair.
+
+  Known devices is what has been paired. It persists, and it is what there is
+  to manage: Connect, Disconnect, Forget.
+
+  Scan starts a search for devices that are not known yet and runs for thirty
+  seconds. It is a switch: while it runs the button says Stop scan.
+
+  The service itself is started and stopped here, and the button says which of
+  the two it will do. Whether it is running is checked every couple of seconds,
+  so a service started by bt.usbfd when a controller was plugged in shows up
+  without anything being pressed.
+
+  The name field is what other devices see, and what they offer to connect to.
+  It is remembered.
+
+  Buttons that act on a selection are disabled while there is none.
+
+  The window is localised. Translations go in
+  LOCALE:Catalogs/<language>/BluetoothGUI.catalog, and the English built into
+  the program is used for anything a catalog does not cover.
+
+
+--------------------------------------------------------------------------------
+bt.usbfd
+--------------------------------------------------------------------------------
+
+  A USB function driver, installed in DEVS:USB/fd. When a Bluetooth controller
+  appears it starts BluetoothService, so a dongle left plugged in means
+  Bluetooth is up by the time the Workbench is.
+
+  It does nothing until the USB stack has finished booting and the service is
+  actually reachable on disk. Both matter: a dongle plugged in at power on gets
+  the driver called extremely early, when the boot volume may not be mounted,
+  and touching DOS at that point does not fail politely - it stops the boot.
+
+
+--------------------------------------------------------------------------------
+DEVICES
+--------------------------------------------------------------------------------
+
+  Mice and keyboards, over both Bluetooth LE and Bluetooth Classic. These are
+  genuinely different: an LE device is found by scanning for its
+  advertisements, a Classic one only by inquiry, and a Classic keyboard never
+  advertises at all.
+
+  Reports are decoded through the device's own HID report descriptor, looking
+  fields up by what they mean rather than by where they sit, so the layout of a
+  particular device does not matter.
+
+  Keyboards are mapped positionally: HID usage 0x14 is "the key where Q is on a
+  US keyboard", and that is mapped to the Amiga raw key code for the same
+  physical key. What it produces is then decided by the keymap you have chosen,
+  so an Italian or German layout comes out right without anything here knowing
+  about it. Dead keys work: every key event carries the two previously pressed
+  keys, which is how keymap.library composes accented characters.
+
+  Held keys repeat, at the delay and rate set in Prefs/Input. That is the
+  keyboard driver's job on AmigaOS, not input.device's, so it is done here.
+
+
+--------------------------------------------------------------------------------
+WHEN SOMETHING DOES NOT WORK
+--------------------------------------------------------------------------------
+
+  Nothing is found, and the log shows no devices at all
+    Almost always missing firmware. The paths BTstack tried are printed at
+    startup - check the files are actually there, uncompressed, and named
+    exactly as printed.
+
+  A Classic keyboard pairs and works, then stops after a minute
+    A stale link key. Run with --forget-all and pair it again.
+
+  A device is listed but will not connect
+    If it is Classic and asleep it is not listening; press a key on it. A
+    bonded keyboard reconnects by calling the computer, not the other way
+    round.
+
+  Wrong characters, or a modifier stuck on
+    If every report carries the same modifier, that is the keyboard's own
+    state, not the decoding - press and release that modifier to clear it.
+    Running with -v prints each report and the descriptor it is decoded with.
+
+  The GUI says the service is a different version
+    The three programs share a protocol and are updated together. Copy all of
+    BluetoothService, BluetoothGUI and bt.usbfd, and restart the service.
+
+  For anything else, -l FILE writes a packet log that Wireshark reads, which
+  shows what actually went over the air rather than what was meant to.
+
+
+--------------------------------------------------------------------------------
+NOT YET
+--------------------------------------------------------------------------------
+
+  Audio devices - headsets, speakers, microphones.
+  Serial port profile.
+  Networking over Bluetooth.
+
+
+--------------------------------------------------------------------------------
+CREDITS AND LICENCE
+--------------------------------------------------------------------------------
+
+  BTstack is by BlueKitchen GmbH, and carries its own licence: free for
+  non-commercial use, with commercial licensing available from BlueKitchen.
+  See the LICENSE file.
+
+  The AmigaOS 4 port is by Andrea Palmate.
+
+  Controller firmware is Realtek's, redistributed from linux-firmware under the
+  terms in its WHENCE file, and is covered by neither of the above.

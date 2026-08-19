@@ -2,3 +2,6 @@ build/
 *.pklg
 log.txt
 usb.txt
+
+# assembled by install/make-archive.sh
+build/BluetoothStack/

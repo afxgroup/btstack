@@ -1,0 +1,204 @@
+; Installer script for Bluetooth for AmigaOS 4
+;
+; Five destinations, four of them fixed by what the system expects and one
+; asked for: the service belongs in C: because bt.usbfd starts it by name, the
+; library in LIBS:, the function driver where the USB stack looks for drivers,
+; and the firmware where the service looks for it. Only the GUI and the
+; documents are the user's to place.
+
+(set #app-name "Bluetooth for AmigaOS 4")
+
+(set #welcome
+  (cat "\n" #app-name "\n\n"
+       "A Bluetooth stack for AmigaOS 4, based on BTstack.\n\n"
+       "Mice and keyboards, over both Bluetooth LE and Bluetooth Classic, "
+       "feeding input.device so they drive the whole machine.\n\n"
+       "This will install:\n\n"
+       "  BluetoothService  in C:\n"
+       "  libusb-1.library  in LIBS:\n"
+       "  bt.usbfd          in DEVS:USB/fd\n"
+       "  Realtek firmware  in SYS:Firmware/bt\n"
+       "  BluetoothGUI and the documents where you choose\n"))
+
+(set #ask-dest
+  (cat "Where should BluetoothGUI and the documents go?\n\n"
+       "A drawer will be created here. This is not C: - only the service "
+       "itself belongs there, because bt.usbfd starts it by name."))
+
+(set #ask-dest-help
+  (cat "The GUI is an ordinary program and can live anywhere. Somewhere you "
+       "will find it again is the only requirement - a Utilities drawer is a "
+       "reasonable choice.\n\n" @askdir-help))
+
+(set #copy-service-help
+  (cat "BluetoothService is the stack itself. It goes in C: because bt.usbfd "
+       "starts it by name when a Bluetooth controller is plugged in, and looks "
+       "for it there.\n\n" @copyfiles-help))
+
+(set #copy-libusb-help
+  (cat "libusb-1.library is how the stack reaches the USB controller. Nothing "
+       "here works without it.\n\n" @copylib-help))
+
+(set #copy-usbfd-help
+  (cat "bt.usbfd is a USB function driver. With it installed, plugging in a "
+       "Bluetooth controller starts the service by itself, and a controller "
+       "left plugged in means Bluetooth is up by the time the Workbench is.\n\n"
+       "Installing it is optional: without it, run BluetoothService yourself.\n\n"
+       @copyfiles-help))
+
+(set #copy-firmware-help
+  (cat "Realtek controllers hold no firmware of their own and are given it at "
+       "every startup. Without it the controller comes up, answers commands "
+       "and finds nothing at all - it scans and reports no devices, which "
+       "looks like broken hardware and is not.\n\n"
+       "Only the two files for your controller are ever read.\n\n"
+       @copyfiles-help))
+
+(set #ask-usbfd
+  (cat "Install bt.usbfd, so that plugging in a Bluetooth controller starts "
+       "the service automatically?\n\n"
+       "Without it you can still start BluetoothService yourself."))
+
+(set #ask-firmware
+  (cat "Install the Realtek controller firmware?\n\n"
+       "Answer yes unless you know your controller is not a Realtek one, or "
+       "you have already installed newer firmware. A Realtek controller "
+       "without it finds no devices at all."))
+
+(set #no-usb-drawer
+  (cat "DEVS:USB does not exist, so the USB stack does not appear to be "
+       "installed on this system.\n\n"
+       "bt.usbfd will be skipped. Everything else is installed, and you can "
+       "start BluetoothService yourself."))
+
+(set #exit-msg
+  (cat "\n" #app-name " is installed.\n\n"
+       "Plug in a Bluetooth controller and start BluetoothGUI, then give this "
+       "machine a name and press Scan.\n\n"
+       "Put your mouse or keyboard into pairing mode, and when it appears in "
+       "the top list, select it and press Pair. From then on it reconnects by "
+       "itself.\n\n"
+       "BluetoothStack.doc has the rest, including what to do when something "
+       "does not work.\n"))
+
+(welcome #welcome)
+
+(complete 0)
+
+;-----------------------------------------------------------------------------
+; Where the user's part goes
+;-----------------------------------------------------------------------------
+
+(set @default-dest
+  (askdir
+    (prompt #ask-dest)
+    (help   #ask-dest-help)
+    (default "SYS:Utilities")
+    (newpath)))
+
+(set #app-dest (tackon @default-dest "Bluetooth"))
+(makedir #app-dest (infos))
+
+(copyfiles
+  (prompt "Installing BluetoothGUI")
+  (help   @copyfiles-help)
+  (source "BluetoothGUI")
+  (dest   #app-dest)
+  (infos)
+  (confirm)
+)
+
+(copyfiles
+  (prompt "Installing the documentation")
+  (help   @copyfiles-help)
+  (source "Documentation")
+  (dest   #app-dest)
+  (all)
+  (infos)
+)
+
+(copyfiles
+  (prompt "Installing the readme")
+  (help   @copyfiles-help)
+  (source "README.md")
+  (dest   #app-dest)
+)
+
+(copyfiles
+  (prompt "Installing the licence")
+  (help   @copyfiles-help)
+  (source "LICENSE")
+  (dest   #app-dest)
+)
+
+(complete 25)
+
+;-----------------------------------------------------------------------------
+; The parts the system expects to find in particular places
+;-----------------------------------------------------------------------------
+
+(copyfiles
+  (prompt "Installing BluetoothService in C:")
+  (help   #copy-service-help)
+  (source "C/BluetoothService")
+  (dest   "C:")
+  (confirm)
+)
+
+(complete 40)
+
+; copylib compares versions, so a newer library already installed is kept
+(copylib
+  (prompt "Installing libusb-1.library in LIBS:")
+  (help   #copy-libusb-help)
+  (source "Libs/libusb-1.library")
+  (dest   "LIBS:")
+  (confirm)
+)
+
+(complete 55)
+
+;-----------------------------------------------------------------------------
+; The USB function driver, if there is a USB stack to install it into
+;-----------------------------------------------------------------------------
+
+(if (askbool (prompt #ask-usbfd) (help #copy-usbfd-help) (default 1))
+  (
+    (if (exists "DEVS:USB" (noreq))
+      (
+        (makedir "DEVS:USB/fd")
+        (copyfiles
+          (prompt "Installing bt.usbfd")
+          (help   #copy-usbfd-help)
+          (source "Devs/USB/fd/bt.usbfd")
+          (dest   "DEVS:USB/fd")
+        )
+      )
+      (message #no-usb-drawer)
+    )
+  )
+)
+
+(complete 70)
+
+;-----------------------------------------------------------------------------
+; Controller firmware
+;-----------------------------------------------------------------------------
+
+(if (askbool (prompt #ask-firmware) (help #copy-firmware-help) (default 1))
+  (
+    (makedir "SYS:Firmware")
+    (makedir "SYS:Firmware/bt")
+    (copyfiles
+      (prompt "Installing the controller firmware")
+      (help   #copy-firmware-help)
+      (source "Firmware")
+      (dest   "SYS:Firmware/bt")
+      (all)
+    )
+  )
+)
+
+(complete 100)
+
+(exit #exit-msg)
