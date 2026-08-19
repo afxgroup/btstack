@@ -194,19 +194,56 @@ static bt_device_t * device_add(const bd_addr_t addr, uint8_t addr_type){
     if (device != NULL) return device;
 
     uint8_t i;
+    uint8_t slot = MAX_DEVICES;
+
     for (i = 0; i < MAX_DEVICES; i++){
-        if (devices[i].in_use) continue;
-        memset(&devices[i], 0, sizeof(bt_device_t));
-        devices[i].in_use = true;
-        devices[i].con_handle = HCI_CON_HANDLE_INVALID;
-        memcpy(devices[i].info.bd_addr, addr, 6);
-        devices[i].info.addr_type = addr_type;
-        devices[i].info.state = BT_DEVICE_STATE_FOUND;
-        return &devices[i];
+        if (!devices[i].in_use){
+            slot = i;
+            break;
+        }
     }
-    /* table full: the oldest entries are not evicted on purpose - a device the
-     * user is using must never be dropped to make room for one just seen */
-    return NULL;
+
+    /*
+     * Full: take the slot of something we merely walked past.
+     *
+     * Every advertising device ends up in here, and a room with a couple of
+     * dozen BLE beacons in it fills the table in seconds - after which nothing
+     * new could be added at all. That is not an abstract worry: it is why a
+     * keyboard that had connected perfectly well was then ignored by the
+     * service, because registering it needed a slot and there was none.
+     *
+     * Anything the user has a relationship with stays: bonded devices, ones we
+     * are connected to, and ones a handler wants. What gets dropped is a
+     * passing beacon, which costs nothing - it will be re-added next time it
+     * advertises.
+     */
+    if (slot == MAX_DEVICES){
+        for (i = 0; i < MAX_DEVICES; i++){
+            if (devices[i].autoconnect) continue;
+            if (devices[i].con_handle != HCI_CON_HANDLE_INVALID) continue;
+            if (devices[i].handler != NULL) continue;
+            if (devices[i].info.state != BT_DEVICE_STATE_FOUND) continue;
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot == MAX_DEVICES){
+        service_log("service: device table full, cannot add %s\n", bd_addr_to_str(addr));
+        return NULL;
+    }
+
+    if (devices[slot].in_use){
+        bt_service_port_notify(BTEVENT_DEVICE_REMOVED, &devices[slot].info, 0);
+    }
+
+    memset(&devices[slot], 0, sizeof(bt_device_t));
+    devices[slot].in_use = true;
+    devices[slot].con_handle = HCI_CON_HANDLE_INVALID;
+    memcpy(devices[slot].info.bd_addr, addr, 6);
+    devices[slot].info.addr_type = addr_type;
+    devices[slot].info.state = BT_DEVICE_STATE_FOUND;
+    return &devices[slot];
 }
 
 static void device_set_state(bt_device_t * device, bt_device_state_t state){
@@ -432,7 +469,11 @@ static void handler_status(const bt_profile_handler_t * handler, const bd_addr_t
     bt_device_t * device = device_for_addr(addr);
     if (device == NULL){
         device = device_add(addr, 0xff);
-        if (device == NULL) return;
+        if (device == NULL){
+            service_log("service: no room for %s, it is running unmanaged\n",
+                        bd_addr_to_str(addr));
+            return;
+        }
         service_log("service: %s connected to us\n", bd_addr_to_str(addr));
     }
 
@@ -915,7 +956,10 @@ static void sm_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *pa
             if (sm_event_pairing_complete_get_status(packet) == ERROR_CODE_SUCCESS){
                 encrypted = true;
             } else {
-                service_log("service: pairing failed, status 0x%02x reason 0x%02x\n",
+                bt_device_t * failed = device_for_handle(con_handle);
+                service_log("service: pairing with %s (addr type %u) failed, status 0x%02x reason 0x%02x\n",
+                            failed ? bd_addr_to_str(failed->info.bd_addr) : "?",
+                            failed ? failed->info.addr_type : 0xff,
                             sm_event_pairing_complete_get_status(packet),
                             sm_event_pairing_complete_get_reason(packet));
                 gap_disconnect(con_handle);
