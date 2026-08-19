@@ -172,8 +172,19 @@ and is what there is to manage: connect, disconnect, or forget.
 Scan also restarts the Classic inquiry, which the service stops by itself once
 everything it knows is connected - so it is the way to add a second keyboard.
 
-Buttons that act on a selection are disabled while there is none. Scan is not:
-it acts on nothing in particular.
+The service itself is started and stopped from here, and the button says which
+of the two it will do. Whether it is running is checked every couple of seconds
+rather than assumed: the service is not the GUI's to own - bt.usbfd starts it
+when a controller is plugged in, it can be stopped from a Shell, and it can exit
+by itself - and there is nothing to be notified by when the thing that would
+send the notification is the thing that has gone.
+
+With no service running the lists are emptied and every other button is
+disabled, including Scan. Everything shown belongs to the service, and listing a
+device as connected by a service that is not there would be worse than showing
+nothing at all.
+
+Buttons that act on a selection are disabled while there is none.
 
 It is localised. `BluetoothGUI.cd` describes the strings for translators and
 `bluetooth_gui_cat.h` holds the IDs with their English text in the shape CatComp

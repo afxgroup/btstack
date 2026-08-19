@@ -47,6 +47,11 @@
 #define MSG_NO_CLASSES           1029
 #define MSG_NO_WINDOW            1030
 #define MSG_NO_NAME              1031
+#define MSG_BUTTON_START_SERVICE 1032
+#define MSG_BUTTON_STOP_SERVICE  1033
+#define MSG_HINT_START_SERVICE   1034
+#define MSG_HINT_STOP_SERVICE    1035
+#define MSG_SERVICE_STOPPED      1036
 
 #define MSG_WINDOW_TITLE_STR         "Bluetooth Devices"
 #define MSG_NEARBY_STR               "Nearby"
@@ -80,6 +85,11 @@
 #define MSG_NO_CLASSES_STR           "Cannot open the ReAction classes this needs."
 #define MSG_NO_WINDOW_STR            "Cannot open the window."
 #define MSG_NO_NAME_STR              "(no name)"
+#define MSG_BUTTON_START_SERVICE_STR "Start _service"
+#define MSG_BUTTON_STOP_SERVICE_STR  "Stop _service"
+#define MSG_HINT_START_SERVICE_STR   "Start the Bluetooth service, so devices can connect"
+#define MSG_HINT_STOP_SERVICE_STR    "Stop the Bluetooth service and disconnect everything"
+#define MSG_SERVICE_STOPPED_STR      "The Bluetooth service is not running"
 
 struct CatCompArrayType {
     LONG   cca_ID;
@@ -119,6 +129,11 @@ static const struct CatCompArrayType CatCompArray[] = {
     { MSG_NO_CLASSES,          (STRPTR) MSG_NO_CLASSES_STR },
     { MSG_NO_WINDOW,           (STRPTR) MSG_NO_WINDOW_STR },
     { MSG_NO_NAME,             (STRPTR) MSG_NO_NAME_STR },
+    { MSG_BUTTON_START_SERVICE,(STRPTR) MSG_BUTTON_START_SERVICE_STR },
+    { MSG_BUTTON_STOP_SERVICE, (STRPTR) MSG_BUTTON_STOP_SERVICE_STR },
+    { MSG_HINT_START_SERVICE,  (STRPTR) MSG_HINT_START_SERVICE_STR },
+    { MSG_HINT_STOP_SERVICE,   (STRPTR) MSG_HINT_STOP_SERVICE_STR },
+    { MSG_SERVICE_STOPPED,     (STRPTR) MSG_SERVICE_STOPPED_STR },
 };
 
 #define CATCOMP_ARRAY_SIZE (sizeof(CatCompArray) / sizeof(CatCompArray[0]))

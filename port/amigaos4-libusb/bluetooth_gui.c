@@ -30,6 +30,8 @@
 #include <proto/intuition.h>
 #include <proto/utility.h>
 #include <proto/locale.h>
+#include <devices/timer.h>
+#include <dos/dostags.h>
 #include <proto/window.h>
 #include <proto/layout.h>
 #include <proto/listbrowser.h>
@@ -162,6 +164,31 @@ static bt_result_t bt_command(bt_command_t command, const uint8 * addr, uint8 ad
     return msg.bsm_Result;
 }
 
+/*
+ * Whether the service is running, checked on a timer.
+ *
+ * It is not ours to own: bt.usbfd starts it when a controller is plugged in, it
+ * can be stopped from a Shell, and it can exit on its own. Asking every couple
+ * of seconds is enough to keep the window honest without being a poll loop in
+ * any meaningful sense - and there is nothing to be notified by when the thing
+ * that would notify us is the thing that is gone.
+ */
+#define SERVICE_CHECK_SECONDS 2
+
+static struct MsgPort     * timer_port;
+static struct TimeRequest * timer_req;
+static bool                 timer_pending;
+static bool                 service_running;
+
+static void timer_arm(uint32 seconds){
+    if (timer_req == NULL) return;
+    timer_req->Request.io_Command = TR_ADDREQUEST;
+    timer_req->Time.Seconds       = seconds;
+    timer_req->Time.Microseconds  = 0;
+    SendIO((struct IORequest *) timer_req);
+    timer_pending = true;
+}
+
 static bool service_present(void){
     Forbid();
     bool present = FindPort(BLUETOOTH_SERVICE_PORT_NAME) != NULL;
@@ -274,6 +301,7 @@ enum {
     GID_CONNECT,
     GID_DISCONNECT,
     GID_FORGET,
+    GID_SERVICE,
 };
 
 static struct List nearby_labels;
@@ -287,6 +315,7 @@ static Object * gad_pair;
 static Object * gad_connect;
 static Object * gad_disconnect;
 static Object * gad_forget;
+static Object * gad_service;
 static struct Window * window;
 
 /* the listbrowser must not be looking at a list while it is being rebuilt */
@@ -357,6 +386,60 @@ static void known_show(void){
 }
 
 /*
+ * Follow the service appearing or disappearing.
+ *
+ * Everything shown belongs to the service, so when it goes the lists go with
+ * it - leaving a device listed as connected by a service that is not running
+ * would be worse than showing nothing. When it comes back we subscribe again,
+ * since the subscription died with it, and ask what it knows.
+ */
+static void service_state_changed(bool running){
+
+    service_running = running;
+
+    if (running){
+        subscribed = bt_command(BTCMD_SUBSCRIBE_EVENTS, NULL, 0, NULL, 0, NULL) == BT_RESULT_OK;
+        known_refresh();
+    } else {
+        subscribed   = false;
+        nearby_count = 0;
+        known_count  = 0;
+    }
+
+    nearby_show();
+    known_show();
+
+    if (window != NULL){
+        SetGadgetAttrs((struct Gadget *) gad_service, window, NULL,
+                       GA_Text,     running ? GetString(MSG_BUTTON_STOP_SERVICE)
+                                            : GetString(MSG_BUTTON_START_SERVICE),
+                       GA_HintInfo, running ? GetString(MSG_HINT_STOP_SERVICE)
+                                            : GetString(MSG_HINT_START_SERVICE),
+                       TAG_DONE);
+    }
+}
+
+/*
+ * Start the service as its own process.
+ *
+ * Detached, with its handles on NIL:, so it outlives this window - it is a
+ * service, and closing the thing that manages it is no reason for it to stop.
+ */
+static void service_start(void){
+    BPTR nil_in  = Open("NIL:", MODE_OLDFILE);
+    BPTR nil_out = Open("NIL:", MODE_NEWFILE);
+
+    SystemTags("C:BluetoothService",
+               SYS_Input,  nil_in,
+               SYS_Output, nil_out,
+               SYS_Error,  ZERO,
+               SYS_Asynch, TRUE,
+               NP_Name,    "BluetoothService",
+               TAG_DONE);
+    /* with SYS_Asynch the handles belong to the new process */
+}
+
+/*
  * A button that acts on a selection is off while there is none.
  *
  * Every one of these needs a device, so with nothing selected there is nothing
@@ -369,9 +452,12 @@ static void known_show(void){
 static void buttons_update(void){
     if (window == NULL) return;
 
-    BOOL nearby_off = (selected_row(gad_nearby) < 0) ? TRUE : FALSE;
-    BOOL known_off  = (selected_row(gad_known)  < 0) ? TRUE : FALSE;
+    /* with no service there is nothing any of these could act on */
+    BOOL nearby_off = (!service_running || (selected_row(gad_nearby) < 0)) ? TRUE : FALSE;
+    BOOL known_off  = (!service_running || (selected_row(gad_known)  < 0)) ? TRUE : FALSE;
 
+    SetGadgetAttrs((struct Gadget *) gad_scan,       window, NULL,
+                   GA_Disabled, service_running ? FALSE : TRUE, TAG_DONE);
     SetGadgetAttrs((struct Gadget *) gad_pair,       window, NULL, GA_Disabled, nearby_off, TAG_DONE);
     SetGadgetAttrs((struct Gadget *) gad_connect,    window, NULL, GA_Disabled, known_off,  TAG_DONE);
     SetGadgetAttrs((struct Gadget *) gad_disconnect, window, NULL, GA_Disabled, known_off,  TAG_DONE);
@@ -456,9 +542,23 @@ int main(void){
     NewList(&nearby_labels);
     NewList(&known_labels);
 
-    if (!service_present()){
-        printf("%s\n", GetString(MSG_NO_SERVICE));
+    timer_port = AllocSysObjectTags(ASOT_PORT, TAG_END);
+    if (timer_port != NULL){
+        timer_req = AllocSysObjectTags(ASOT_IOREQUEST,
+                                       ASOIOR_Size,      sizeof(struct TimeRequest),
+                                       ASOIOR_ReplyPort, timer_port,
+                                       TAG_END);
     }
+    if ((timer_req == NULL) ||
+        (OpenDevice(TIMERNAME, UNIT_VBLANK, (struct IORequest *) timer_req, 0) != 0)){
+        /* without it the state is only refreshed when something else happens,
+         * which is worth carrying on for rather than refusing to start */
+        if (timer_req != NULL){
+            FreeSysObject(ASOT_IOREQUEST, timer_req);
+            timer_req = NULL;
+        }
+    }
+
 
     gad_nearby = ListBrowserObject,
         GA_ID,                      GID_NEARBY,
@@ -517,6 +617,12 @@ int main(void){
 
                 LAYOUT_AddChild, HLayoutObject,
                     LAYOUT_EvenSize, TRUE,
+                    LAYOUT_AddChild, gad_service = ButtonObject,
+                        GA_ID,        GID_SERVICE,
+                        GA_RelVerify, TRUE,
+                        GA_Text,      GetString(MSG_BUTTON_START_SERVICE),
+                        GA_HintInfo,  GetString(MSG_HINT_START_SERVICE),
+                    End,
                     LAYOUT_AddChild, gad_scan,
                     LAYOUT_AddChild, gad_pair = ButtonObject,
                         GA_ID,        GID_PAIR,
@@ -573,22 +679,35 @@ int main(void){
         return RETURN_FAIL;
     }
 
-    /* live updates rather than polling: the service tells us what changed */
-    subscribed = bt_command(BTCMD_SUBSCRIBE_EVENTS, NULL, 0, NULL, 0, NULL) == BT_RESULT_OK;
-    known_refresh();
-    known_show();
+    /* live updates for what the service knows; the timer is only for whether it
+     * is there at all, which it cannot very well tell us itself */
+    service_state_changed(service_present());
     buttons_update();
+    timer_arm(SERVICE_CHECK_SECONDS);
 
     uint32 window_sig = 0;
     GetAttr(WINDOW_SigMask, win_obj, &window_sig);
     uint32 event_sig = 1UL << event_port->mp_SigBit;
+    uint32 timer_sig = (timer_req != NULL) ? (1UL << timer_port->mp_SigBit) : 0;
 
     bool done = false;
     while (!done){
 
-        uint32 signals = Wait(window_sig | event_sig | SIGBREAKF_CTRL_C);
+        uint32 signals = Wait(window_sig | event_sig | timer_sig | SIGBREAKF_CTRL_C);
 
         if (signals & SIGBREAKF_CTRL_C) done = true;
+
+        if (signals & timer_sig){
+            while (GetMsg(timer_port) != NULL) { /* drain */ }
+            timer_pending = false;
+
+            bool running = service_present();
+            if (running != service_running){
+                service_state_changed(running);
+                buttons_update();
+            }
+            timer_arm(SERVICE_CHECK_SECONDS);
+        }
 
         if (signals & event_sig){
             BTServiceEvent * event;
@@ -655,6 +774,19 @@ int main(void){
                             case GID_NEARBY:
                             case GID_KNOWN:
                                 buttons_update();
+                                break;
+
+                            case GID_SERVICE:
+                                if (service_running){
+                                    bt_command(BTCMD_SHUTDOWN, NULL, 0, NULL, 0, NULL);
+                                } else {
+                                    service_start();
+                                }
+                                /* look again shortly rather than assume it
+                                 * worked: starting is a process being created
+                                 * and stopping is one winding itself down, and
+                                 * neither has finished by the time we get here */
+                                timer_arm(1);
                                 break;
 
                             case GID_SCAN:
@@ -734,6 +866,16 @@ int main(void){
     DisposeObject(win_obj);
     FreeListBrowserList(&nearby_labels);
     FreeListBrowserList(&known_labels);
+
+    if (timer_req != NULL){
+        if (timer_pending){
+            AbortIO((struct IORequest *) timer_req);
+            WaitIO((struct IORequest *) timer_req);
+        }
+        CloseDevice((struct IORequest *) timer_req);
+        FreeSysObject(ASOT_IOREQUEST, timer_req);
+    }
+    if (timer_port != NULL) FreeSysObject(ASOT_PORT, timer_port);
 
     FreeSysObject(ASOT_PORT, event_port);
     FreeSysObject(ASOT_PORT, reply_port);

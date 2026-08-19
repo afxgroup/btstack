@@ -98,3 +98,18 @@ Cannot open the window.
 ;
 MSG_NO_NAME (//32)
 (no name)
+;
+MSG_BUTTON_START_SERVICE (//32)
+Start _service
+;
+MSG_BUTTON_STOP_SERVICE (//32)
+Stop _service
+;
+MSG_HINT_START_SERVICE (//128)
+Start the Bluetooth service, so devices can connect
+;
+MSG_HINT_STOP_SERVICE (//128)
+Stop the Bluetooth service and disconnect everything
+;
+MSG_SERVICE_STOPPED (//128)
+The Bluetooth service is not running
