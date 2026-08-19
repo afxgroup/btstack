@@ -293,6 +293,9 @@ static void          scan_start(bool autoconnect);
 static void          scan_resume_if_idle(void);
 static void          devices_store(void);
 static void          connection_timeout_handler(btstack_timer_source_t * ts);
+static void          inquiry_start(void);
+static void          inquiry_stop(void);
+static bool          discovery_needed(void);
 
 /*
  * After a failed attempt, go back to scanning. Known devices reconnect when
@@ -528,6 +531,12 @@ static void handler_status(const bt_profile_handler_t * handler, const bd_addr_t
         devices_store();
         service_log("service: %s in use by handler '%s'\n",
                     bd_addr_to_str(device->info.bd_addr), device->info.handler);
+        /* nothing left to find means nothing worth disturbing the radio for */
+        if (!discovery_needed()){
+            service_log("service: everything known is connected, discovery idle\n");
+            inquiry_stop();
+        }
+
         /* from here on a handler is driving a device, so console printing is no
          * longer safe - see service_log() */
         injecting_input = true;
@@ -658,6 +667,25 @@ static void classic_reconnect_bonded(void){
     }
 }
 
+/*
+ * Is there anything left to look for?
+ *
+ * Inquiry is the most disruptive thing this service does to the radio: five
+ * seconds of hopping the inquiry sequence, restarted for ever, during which
+ * established links get what is left. That is a fine price while a device we
+ * want is still missing, and pure damage once they are all connected - it was
+ * a good part of why a connected keyboard could not keep its link alive.
+ */
+static bool discovery_needed(void){
+    uint8_t i;
+    for (i = 0; i < MAX_DEVICES; i++){
+        if (!devices[i].in_use)      continue;
+        if (!devices[i].autoconnect) continue;
+        if (devices[i].con_handle == HCI_CON_HANDLE_INVALID) return true;
+    }
+    return false;
+}
+
 static void inquiry_start(void){
     inquiry_wanted = true;
     if (inquiring) return;
@@ -687,7 +715,21 @@ static void scan_start(bool autoconnect){
      * hardware is found immediately by anything scanning actively, which is
      * what Linux does by default.
      */
-    gap_set_scan_parameters(1, 48, 48);
+    /*
+     * Scan a quarter of the time, not all of it.
+     *
+     * This used to pass the same value for interval and window, which is a
+     * hundred percent duty cycle: the radio scans continuously and every other
+     * link has to fit in around it. Together with an inquiry running five
+     * seconds out of every five, that left a Classic keyboard in sniff mode
+     * with no room to complete an exchange, and its link died of supervision
+     * timeout - twenty seconds without one successful packet - while looking
+     * for all the world like the keyboard had gone away.
+     *
+     * 60 ms interval, 15 ms window. A device advertising at any normal rate is
+     * still found within a second or so.
+     */
+    gap_set_scan_parameters(1, 96, 24);
     gap_start_scan();
     scanning = true;
     bt_service_port_notify(BTEVENT_SCAN_STARTED, NULL, 0);
@@ -1074,6 +1116,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
              * sleep, blocking everything else meanwhile */
             if (device->autoconnect && !shutdown_requested){
                 scan_start(true);
+                inquiry_start();   /* scan_start() only does this when it was idle */
             }
             break;
         }
