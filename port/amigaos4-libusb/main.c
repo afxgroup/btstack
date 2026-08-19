@@ -408,6 +408,52 @@ static void usage(const char *name){
 }
 
 #define USB_MAX_PATH_LEN 7
+/*
+ * Give everything back, whichever way we are leaving.
+ *
+ * There used to be two exits: the full one at the end, and a short one for when
+ * btstack_main() refused to start - which closed the transport, the run loop and
+ * libusb, and nothing else. Starting a second service while one was running took
+ * that short path, and amigaos4_input_open() had already created two message
+ * ports by then, so the process exited with their two signal bits still
+ * allocated: 0x0C000000, reported by the Shell.
+ *
+ * Every step is printed on the way out, so if this ever hangs, the last line
+ * says which step did not return. Each of these does nothing when the thing it
+ * releases was never set up, so the early exit can call it just as safely.
+ */
+static void shutdown_everything(bool ran)
+{
+    // put the console back into normal mode
+    btstack_stdin_reset();
+
+    // release input.device if an application (e.g. bthid) opened it. Does
+    // nothing otherwise, and releases held mouse buttons before closing.
+    if (ran) amigaos4_input_dump_stats();
+    amigaos4_input_close();
+
+    // Remove the public MsgPort if an application (BluetoothService) created
+    // one. Does nothing otherwise. Without this the port stays registered after
+    // the process is gone, its signal bits are never freed, and the next start
+    // finds the name taken by a port belonging to a task that no longer exists.
+    bt_service_port_close();
+
+    // A forced exit (second CTRL-C) leaves the HCI state machine mid-flight, so
+    // close the transport explicitly - this releases the USB interface and closes
+    // the device in any case.
+    hci_transport_usb_instance()->close();
+    printf("shutdown: transport closed\n");
+
+    hci_dump_posix_fs_close();
+    printf("shutdown: packet log closed\n");
+
+    btstack_run_loop_amigaos_deinit();
+    printf("shutdown: run loop deinit done\n");
+
+    amigaos4_libusb1_close();
+    printf("shutdown: libusb-1.library closed\n");
+}
+
 int main(int argc, const char * argv[]){
 
     uint8_t usb_path[USB_MAX_PATH_LEN];
@@ -550,9 +596,7 @@ int main(int argc, const char * argv[]){
     // port. Running the loop anyway would leave a second, useless process
     // behind, which is exactly what happened.
     if (btstack_main(argc, argv) < 0){
-        hci_transport_usb_instance()->close();
-        btstack_run_loop_amigaos_deinit();
-        amigaos4_libusb1_close();
+        shutdown_everything(false);
         return EXIT_FAILURE;
     }
 
@@ -569,39 +613,10 @@ int main(int argc, const char * argv[]){
     // go
     btstack_run_loop_execute();
 
-    // Shutdown. Every step is printed: if the process ever hangs on the way out,
-    // the last line printed says exactly which step did not return.
     printf("shutdown: run loop left\n");
-
-    // put the console back into normal mode
-    btstack_stdin_reset();
-
-    // release input.device if an application (e.g. bthid) opened it. Does
-    // nothing otherwise, and releases held mouse buttons before closing.
-    amigaos4_input_dump_stats();
-    amigaos4_input_close();
-
-    // Remove the public MsgPort if an application (BluetoothService) created
-    // one. Does nothing otherwise. Without this the port stays registered after
-    // the process is gone, its signal bits are never freed, and the next start
-    // finds the name taken by a port belonging to a task that no longer exists.
-    bt_service_port_close();
-
-    // A forced exit (second CTRL-C) leaves the HCI state machine mid-flight, so
-    // close the transport explicitly - this releases the USB interface and closes
-    // the device in any case.
-    hci_transport_usb_instance()->close();
-    printf("shutdown: transport closed\n");
-
-    hci_dump_posix_fs_close();
-    printf("shutdown: packet log closed\n");
-
-    btstack_run_loop_amigaos_deinit();
-    printf("shutdown: run loop deinit done\n");
-
-    amigaos4_libusb1_close();
-    printf("shutdown: libusb-1.library closed\n");
-
+    shutdown_everything(true);
     printf("shutdown: bye\n");
     return 0;
 }
+
+
