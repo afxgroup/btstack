@@ -48,6 +48,7 @@
 #include "amigaos4_input.h"
 #include "bt_handler_hid.h"
 #include "bt_handler_hid_classic.h"
+#include "bt_usb_watch.h"
 #include "bt_profile_handler.h"
 #include "bt_service_port.h"
 #include "btstack_run_loop_amigaos.h"
@@ -960,6 +961,21 @@ static void scan_start(bool autoconnect){
  * proof it is awake and in range: that is the moment to reconnect, handled in
  * the advertising report below.
  */
+/*
+ * The last Bluetooth controller has been unplugged.
+ *
+ * Not the same as "a controller was unplugged": two dongles are perfectly
+ * possible and pulling one out is no reason to stop. Once there is none there
+ * is nothing to run for, and staying up would leave a service holding devices
+ * it can no longer reach.
+ */
+static void controller_all_gone(void){
+    service_log("service: the last Bluetooth controller was unplugged, stopping\n");
+    bt_service_port_notify(BTEVENT_CONTROLLER_GONE, NULL, 0);
+    shutdown_requested = true;
+    hci_power_control(HCI_POWER_OFF);
+}
+
 static void service_start_working(void){
 
     name_load();
@@ -1613,6 +1629,13 @@ int btstack_main(int argc, const char * argv[]){
     btstack_run_loop_set_data_source_handler(&input_data_source, &input_poll_ds);
     btstack_run_loop_enable_data_source_callbacks(&input_data_source, DATA_SOURCE_CALLBACK_POLL);
     btstack_run_loop_add_data_source(&input_data_source);
+
+    /*
+     * Watching is a nicety, not a requirement: a USB stack with no
+     * notifications means the service keeps running when the dongle goes,
+     * which is what it did before and is no worse than before.
+     */
+    bt_usb_watch_open(&controller_all_gone);
 
     if (bt_service_port_open(&handle_command) == false){
         service_log("ERROR: cannot create the service port - is a service already running?\n");

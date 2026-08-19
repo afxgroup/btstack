@@ -198,6 +198,8 @@ static bool usb_device_has_bt_interface(libusb_device * device){
     return found;
 }
 
+static bool usb_find_quiet;
+
 static libusb_device * usb_find_device(void){
     libusb_device ** list;
     ssize_t cnt = libusb_get_device_list(usb_ctx, &list);
@@ -206,8 +208,10 @@ static libusb_device * usb_find_device(void){
     for (ssize_t i = 0; i < cnt; i++){
         struct libusb_device_descriptor desc;
         if (libusb_get_device_descriptor(list[i], &desc) != 0) continue;
-        printf("USB: %04x:%04x (class %02x/%02x/%02x)\n", desc.idVendor, desc.idProduct,
-               desc.bDeviceClass, desc.bDeviceSubClass, desc.bDeviceProtocol);
+        if (!usb_find_quiet){
+            printf("USB: %04x:%04x (class %02x/%02x/%02x)\n", desc.idVendor, desc.idProduct,
+                   desc.bDeviceClass, desc.bDeviceSubClass, desc.bDeviceProtocol);
+        }
 
         /*
          * Any controller that says it speaks Bluetooth is taken: Wireless
@@ -633,4 +637,27 @@ static const hci_transport_t hci_transport_usb = {
 
 const hci_transport_t * hci_transport_usb_instance(void){
     return &hci_transport_usb;
+}
+
+/*
+ * Is any Bluetooth controller plugged in at all?
+ *
+ * The same search that picks one to open, asked as a question rather than to
+ * get an answer to keep. Two dongles are perfectly possible, so a controller
+ * being unplugged is not the same as there being none - which is the whole
+ * point of asking.
+ *
+ * Quiet, because this runs on every USB device being removed and the listing
+ * belongs to startup.
+ */
+bool hci_transport_usb_controller_present(void){
+    if (usb_ctx == NULL) return false;
+
+    usb_find_quiet = true;
+    libusb_device * device = usb_find_device();
+    usb_find_quiet = false;
+
+    if (device == NULL) return false;
+    libusb_unref_device(device);
+    return true;
 }
