@@ -56,6 +56,7 @@
 
 /* the known devices are kept in the TLV, so a restart - or a reboot - finds the
  * mouse again without the user pairing it a second time */
+#define TLV_TAG_NAME    ((((uint32_t)'B')<<24)|(((uint32_t)'T')<<16)|(((uint32_t)'N')<<8)|((uint32_t)'M'))
 #define TLV_TAG_DEVICES ((((uint32_t)'B')<<24)|(((uint32_t)'T')<<16)|(((uint32_t)'D')<<8)|'V')
 
 typedef struct {
@@ -170,6 +171,27 @@ static bool autoconnect_on_find;
 static bool inquiring;
 static bool inquiry_wanted;
 static bool inquiry_requested;   /* a client asked to look for new devices */
+
+/*
+ * How long an explicitly requested discovery runs for.
+ *
+ * Long enough for a device to be switched on and found, short enough that the
+ * radio goes back to the devices already connected without anyone having to
+ * remember to stop it.
+ */
+#define DISCOVERY_DURATION_MS 30000
+static uint32_t discovery_until_ms;
+
+/*
+ * The name other devices see, and the one they offer to connect to.
+ *
+ * BTstack keeps the pointer rather than a copy, so this buffer has to outlive
+ * every call - a local would be a dangling pointer the moment it went out of
+ * scope, and the failure would be a garbled name rather than a crash, which is
+ * worse to track down.
+ */
+#define LOCAL_NAME_MAX 32
+static char local_name[LOCAL_NAME_MAX] = "AmigaOS";
 
 static const btstack_tlv_t * tlv_impl;
 static void *                tlv_context;
@@ -698,6 +720,25 @@ static void devices_store(void){
     service_log("service: %u known device(s) stored\n", count);
 }
 
+static void name_load(void){
+    btstack_tlv_get_instance(&tlv_impl, &tlv_context);
+    if (tlv_impl == NULL) return;
+
+    char stored[LOCAL_NAME_MAX];
+    int len = tlv_impl->get_tag(tlv_context, TLV_TAG_NAME, (uint8_t *) stored, sizeof(stored));
+    if ((len > 0) && (stored[0] != 0)){
+        stored[sizeof(stored) - 1] = 0;
+        btstack_strcpy(local_name, sizeof(local_name), stored);
+    }
+    gap_set_local_name(local_name);
+    service_log("service: known to others as '%s'\n", local_name);
+}
+
+static void name_store(void){
+    if (tlv_impl == NULL) return;
+    tlv_impl->store_tag(tlv_context, TLV_TAG_NAME, (const uint8_t *) local_name, sizeof(local_name));
+}
+
 static uint8_t devices_load(void){
     btstack_tlv_get_instance(&tlv_impl, &tlv_context);
     if (tlv_impl == NULL) return 0;
@@ -911,6 +952,8 @@ static void scan_start(bool autoconnect){
  * the advertising report below.
  */
 static void service_start_working(void){
+
+    name_load();
 
     if (forget_all){
         /* the TLV instance is what devices_load() would fetch, and both the
@@ -1184,6 +1227,14 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             /* inquiry is bounded, so keep it going for as long as we are
              * looking - otherwise a Classic device switched on a minute later
              * would never be found */
+            if (inquiry_requested &&
+                (btstack_time_delta(btstack_run_loop_get_time_ms(), discovery_until_ms) >= 0)){
+                inquiry_requested = false;
+                inquiry_wanted    = false;
+                service_log("service: discovery finished\n");
+                bt_service_port_notify(BTEVENT_SCAN_STOPPED, NULL, 0);
+                break;
+            }
             if (inquiry_wanted && !shutdown_requested){
                 inquiry_start();
             }
@@ -1385,14 +1436,50 @@ static bt_result_t handle_command(BTServiceMsg * msg){
             controller_ready = false;
             return BT_RESULT_OK;
 
+        case BTCMD_GET_NAME:
+            btstack_strcpy(msg->bsm_Name, sizeof(msg->bsm_Name), local_name);
+            return BT_RESULT_OK;
+
+        case BTCMD_SET_NAME: {
+            msg->bsm_Name[sizeof(msg->bsm_Name) - 1] = 0;
+            if (msg->bsm_Name[0] == 0) return BT_RESULT_UNSUPPORTED;
+
+            btstack_strcpy(local_name, sizeof(local_name), msg->bsm_Name);
+            /*
+             * Applied and stored, in that order: a name that the controller
+             * refused is not one to remember, and gap_set_local_name() keeps
+             * our buffer rather than copying it, which is why local_name is
+             * static and is written before this is called.
+             */
+            gap_set_local_name(local_name);
+            name_store();
+            service_log("service: now known to others as '%s'\n", local_name);
+            return BT_RESULT_OK;
+        }
+
         case BTCMD_SCAN_START:
             if (controller_ready == false) return BT_RESULT_NO_CONTROLLER;
             if (pending_device != NULL)     return BT_RESULT_BUSY;
-            /* asked for explicitly, so look for Classic devices too even when
-             * one is already bonded - this is how a second one gets added */
+            /*
+             * Asked for explicitly, so look for Classic devices too even when
+             * one is already bonded - that is how a second one gets added.
+             *
+             * inquiry_start() has to be called here rather than left to
+             * scan_start(), which returns straight away when a scan is already
+             * running and never reaches it. Since the service scans all the
+             * time, that was always, and the button did nothing whatsoever.
+             *
+             * It runs for a bounded time. Inquiry is expensive enough that
+             * leaving it on for ever is what the automatic one was changed to
+             * stop doing, and a discovery that never ends is not what pressing
+             * a button asks for.
+             */
             inquiry_requested    = true;
+            discovery_until_ms   = btstack_run_loop_get_time_ms() + DISCOVERY_DURATION_MS;
             classic_reconnect_ms = CLASSIC_RECONNECT_MIN_MS;
             scan_start(false);
+            inquiry_start();
+            bt_service_port_notify(BTEVENT_SCAN_STARTED, NULL, 0);
             return BT_RESULT_OK;
 
         case BTCMD_SCAN_STOP:

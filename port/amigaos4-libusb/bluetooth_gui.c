@@ -22,6 +22,7 @@
 #include <gadgets/layout.h>
 #include <gadgets/listbrowser.h>
 #include <gadgets/button.h>
+#include <gadgets/string.h>
 #include <reaction/reaction.h>
 #include <reaction/reaction_macros.h>
 
@@ -36,6 +37,7 @@
 #include <proto/layout.h>
 #include <proto/listbrowser.h>
 #include <proto/button.h>
+#include <proto/string.h>
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -53,7 +55,7 @@
  * the interface pointers - ListBrowserObject is IIntuition->NewObject() with a
  * class from IListBrowser. So they are ours to fill in and ours to give back.
  */
-struct Library *IntuitionBase, *WindowBase, *LayoutBase, *ListBrowserBase, *ButtonBase;
+struct Library *IntuitionBase, *WindowBase, *LayoutBase, *ListBrowserBase, *ButtonBase, *StringBase;
 struct Library *LocaleBase;
 struct LocaleIFace *ILocale;
 struct IntuitionIFace   *IIntuition;
@@ -61,6 +63,7 @@ struct WindowIFace      *IWindow;
 struct LayoutIFace      *ILayout;
 struct ListBrowserIFace *IListBrowser;
 struct ButtonIFace      *IButton;
+struct StringIFace      *IString;
 
 static struct Catalog * catalog;
 
@@ -143,29 +146,27 @@ static void status_show(LONG message_id){
     SetWindowTitles(window, (CONST_STRPTR) GetString(message_id), (CONST_STRPTR) -1);
 }
 
-static bt_result_t bt_command(bt_command_t command, const uint8 * addr, uint8 addr_type,
-                              BTDeviceInfo * devices, uint32 devices_max, uint32 * devices_count){
+/*
+ * Send a prepared message and wait for the answer.
+ *
+ * The port is looked up every time rather than kept, so the service starting
+ * later, or being restarted, needs no action here at all. Everything up to the
+ * PutMsg happens inside Forbid(): between finding a port and using it the task
+ * owning it could be gone, and a message sent to a freed port is not a mistake
+ * that can be noticed afterwards.
+ */
+static bt_result_t bt_send(BTServiceMsg * msg){
 
-    BTServiceMsg msg;
-
-    memset(&msg, 0, sizeof(msg));
-    msg.bsm_Message.mn_Node.ln_Type = NT_MESSAGE;
-    msg.bsm_Message.mn_Length       = sizeof(msg);
-    msg.bsm_Message.mn_ReplyPort    = reply_port;
-    msg.bsm_Version                 = BLUETOOTH_SERVICE_VERSION;
-    msg.bsm_Command                 = command;
-    msg.bsm_Devices                 = devices;
-    msg.bsm_DevicesMax              = devices_max;
-    msg.bsm_EventPort               = event_port;
-    if (addr != NULL){
-        memcpy(msg.bsm_Addr, addr, 6);
-        msg.bsm_AddrType = addr_type;
-    }
+    msg->bsm_Message.mn_Node.ln_Type = NT_MESSAGE;
+    msg->bsm_Message.mn_Length       = sizeof(*msg);
+    msg->bsm_Message.mn_ReplyPort    = reply_port;
+    msg->bsm_Version                 = BLUETOOTH_SERVICE_VERSION;
+    msg->bsm_EventPort               = event_port;
 
     Forbid();
     struct MsgPort * service = FindPort(BLUETOOTH_SERVICE_PORT_NAME);
     if (service != NULL){
-        PutMsg(service, &msg.bsm_Message);
+        PutMsg(service, &msg->bsm_Message);
     }
     Permit();
 
@@ -176,17 +177,57 @@ static bt_result_t bt_command(bt_command_t command, const uint8 * addr, uint8 ad
         WaitPort(reply_port);
     }
 
-    if (devices_count != NULL) *devices_count = msg.bsm_DevicesCount;
-
-    if (msg.bsm_Result == BT_RESULT_UNSUPPORTED){
+    if (msg->bsm_Result == BT_RESULT_UNSUPPORTED){
         status_show(MSG_VERSION_MISMATCH);
-    } else if (msg.bsm_Result != BT_RESULT_OK){
+    } else if (msg->bsm_Result != BT_RESULT_OK){
         status_show(MSG_COMMAND_FAILED);
     } else {
         status_show(MSG_WINDOW_TITLE);
     }
 
-    return msg.bsm_Result;
+    return msg->bsm_Result;
+}
+
+static bt_result_t bt_command(bt_command_t command, const uint8 * addr, uint8 addr_type,
+                              BTDeviceInfo * devices, uint32 devices_max, uint32 * devices_count){
+
+    BTServiceMsg msg;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.bsm_Command    = command;
+    msg.bsm_Devices    = devices;
+    msg.bsm_DevicesMax = devices_max;
+    if (addr != NULL){
+        memcpy(msg.bsm_Addr, addr, 6);
+        msg.bsm_AddrType = addr_type;
+    }
+
+    bt_result_t result = bt_send(&msg);
+    if (devices_count != NULL) *devices_count = msg.bsm_DevicesCount;
+    return result;
+}
+
+/* the name travels in both directions, so it gets its own way in */
+static bt_result_t bt_command_name(bt_command_t command, char * name, uint32 name_size){
+
+    BTServiceMsg msg;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.bsm_Command = command;
+    if (command == BTCMD_SET_NAME){
+        /* the buffer is zeroed above, so a short copy is already terminated */
+        memcpy(msg.bsm_Name, name, strnlen(name, sizeof(msg.bsm_Name) - 1));
+    }
+
+    bt_result_t result = bt_send(&msg);
+
+    if ((result == BT_RESULT_OK) && (command == BTCMD_GET_NAME)){
+        msg.bsm_Name[sizeof(msg.bsm_Name) - 1] = 0;
+        uint32 len = strnlen(msg.bsm_Name, name_size - 1);
+        memcpy(name, msg.bsm_Name, len);
+        name[len] = 0;
+    }
+    return result;
 }
 
 /*
@@ -194,9 +235,9 @@ static bt_result_t bt_command(bt_command_t command, const uint8 * addr, uint8 ad
  *
  * It is not ours to own: bt.usbfd starts it when a controller is plugged in, it
  * can be stopped from a Shell, and it can exit on its own. Asking every couple
- * of seconds is enough to keep the window honest without being a poll loop in
- * any meaningful sense - and there is nothing to be notified by when the thing
- * that would notify us is the thing that is gone.
+ * of seconds keeps the window honest without being a poll loop in any
+ * meaningful sense - and there is nothing to be notified by, since the thing
+ * that would send the notification is the thing that has gone.
  */
 #define SERVICE_CHECK_SECONDS 2
 
@@ -327,6 +368,8 @@ enum {
     GID_DISCONNECT,
     GID_FORGET,
     GID_SERVICE,
+    GID_NAME,
+    GID_SET_NAME,
 };
 
 static struct List nearby_labels;
@@ -341,6 +384,8 @@ static Object * gad_connect;
 static Object * gad_disconnect;
 static Object * gad_forget;
 static Object * gad_service;
+static Object * gad_name;
+static bool     scan_running;
 
 /* the listbrowser must not be looking at a list while it is being rebuilt */
 static int32 selected_row(Object * gadget);
@@ -417,12 +462,22 @@ static void known_show(void){
  * would be worse than showing nothing. When it comes back we subscribe again,
  * since the subscription died with it, and ask what it knows.
  */
+/* the name the service is using, so the field shows what is true now */
+static void name_refresh(void){
+    char name[32];
+    if (bt_command_name(BTCMD_GET_NAME, name, sizeof(name)) != BT_RESULT_OK) return;
+    if ((window == NULL) || (gad_name == NULL)) return;
+    SetGadgetAttrs((struct Gadget *) gad_name, window, NULL,
+                   STRINGA_TextVal, name, TAG_DONE);
+}
+
 static void service_state_changed(bool running){
 
     service_running = running;
 
     if (running){
         subscribed = bt_command(BTCMD_SUBSCRIBE_EVENTS, NULL, 0, NULL, 0, NULL) == BT_RESULT_OK;
+        name_refresh();
         known_refresh();
     } else {
         subscribed   = false;
@@ -480,8 +535,19 @@ static void buttons_update(void){
     BOOL nearby_off = (!service_running || (selected_row(gad_nearby) < 0)) ? TRUE : FALSE;
     BOOL known_off  = (!service_running || (selected_row(gad_known)  < 0)) ? TRUE : FALSE;
 
+    /*
+     * Scan says what it is doing.
+     *
+     * The service scans by itself all the time, so a button that was always
+     * available and appeared to do nothing was worse than none: what it starts
+     * is a Classic inquiry, which runs for half a minute and then stops. While
+     * that is happening the button says so and cannot be pressed again.
+     */
     SetGadgetAttrs((struct Gadget *) gad_scan,       window, NULL,
-                   GA_Disabled, service_running ? FALSE : TRUE, TAG_DONE);
+                   GA_Disabled, (!service_running || scan_running) ? TRUE : FALSE,
+                   GA_Text,     scan_running ? GetString(MSG_BUTTON_SCANNING)
+                                             : GetString(MSG_BUTTON_SCAN),
+                   TAG_DONE);
     SetGadgetAttrs((struct Gadget *) gad_pair,       window, NULL, GA_Disabled, nearby_off, TAG_DONE);
     SetGadgetAttrs((struct Gadget *) gad_connect,    window, NULL, GA_Disabled, known_off,  TAG_DONE);
     SetGadgetAttrs((struct Gadget *) gad_disconnect, window, NULL, GA_Disabled, known_off,  TAG_DONE);
@@ -549,9 +615,10 @@ int main(void){
     LayoutBase      = open_class("gadgets/layout.gadget", 53,     (APTR *) &ILayout);
     ListBrowserBase = open_class("gadgets/listbrowser.gadget", 53,(APTR *) &IListBrowser);
     ButtonBase      = open_class("gadgets/button.gadget", 53,     (APTR *) &IButton);
+    StringBase      = open_class("gadgets/string.gadget", 53,     (APTR *) &IString);
 
     if ((IntuitionBase == NULL) || (WindowBase == NULL) || (LayoutBase == NULL) ||
-        (ListBrowserBase == NULL) || (ButtonBase == NULL)){
+        (ListBrowserBase == NULL) || (ButtonBase == NULL) || (StringBase == NULL)){
         printf("%s\n", GetString(MSG_NO_CLASSES));
         return RETURN_FAIL;
     }
@@ -632,6 +699,24 @@ int main(void){
              * few pixels while the window kept its size, which is what the
              * first version did.
              */
+            LAYOUT_AddChild, HLayoutObject,
+                LAYOUT_Label,    GetString(MSG_LOCAL_NAME),
+                LAYOUT_AddChild, gad_name = StringObject,
+                    GA_ID,          GID_NAME,
+                    GA_RelVerify,   TRUE,
+                    GA_HintInfo,    GetString(MSG_HINT_LOCAL_NAME),
+                    STRINGA_MaxChars, 31,
+                End,
+                LAYOUT_AddChild, ButtonObject,
+                    GA_ID,        GID_SET_NAME,
+                    GA_RelVerify, TRUE,
+                    GA_Text,      GetString(MSG_BUTTON_SET_NAME),
+                    GA_HintInfo,  GetString(MSG_HINT_LOCAL_NAME),
+                End,
+                CHILD_WeightedWidth, 0,
+            End,
+            CHILD_WeightedHeight, 0,
+
             LAYOUT_AddChild, VLayoutObject,
                 LAYOUT_BevelStyle, BVS_GROUP,
                 LAYOUT_Label,      GetString(MSG_NEARBY),
@@ -751,6 +836,16 @@ int main(void){
                         refresh_nearby = true;
                         refresh_known  = true;
                         break;
+                    case BTEVENT_SCAN_STARTED:
+                        scan_running  = true;
+                        refresh_known = true;
+                        break;
+
+                    case BTEVENT_SCAN_STOPPED:
+                        scan_running  = false;
+                        refresh_known = true;
+                        break;
+
                     case BTEVENT_PAIRING_REQUEST:
                         /* accepted by the service for now; showing the number
                          * lets the user check it against the device */
@@ -799,6 +894,18 @@ int main(void){
                             case GID_KNOWN:
                                 buttons_update();
                                 break;
+
+                            case GID_SET_NAME:
+                            case GID_NAME: {
+                                /* Enter in the field means the same as the
+                                 * button: the name as typed is what is wanted */
+                                STRPTR typed = NULL;
+                                GetAttr(STRINGA_TextVal, gad_name, (uint32 *) &typed);
+                                if ((typed != NULL) && (typed[0] != 0)){
+                                    bt_command_name(BTCMD_SET_NAME, (char *) typed, 32);
+                                }
+                                break;
+                            }
 
                             case GID_SERVICE:
                                 if (service_running){
@@ -903,6 +1010,7 @@ int main(void){
     FreeSysObject(ASOT_PORT, event_port);
     FreeSysObject(ASOT_PORT, reply_port);
 
+    close_class(StringBase,      IString);
     close_class(ButtonBase,      IButton);
     close_class(ListBrowserBase, IListBrowser);
     close_class(LayoutBase,      ILayout);

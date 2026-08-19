@@ -119,3 +119,15 @@ Bluetooth Devices - service is a different version, update it
 ;
 MSG_COMMAND_FAILED (//128)
 Bluetooth Devices - the service refused that
+;
+MSG_LOCAL_NAME (//64)
+This computer is known as
+;
+MSG_BUTTON_SET_NAME (//32)
+Se_t
+;
+MSG_HINT_LOCAL_NAME (//128)
+The name other devices see, and can connect to
+;
+MSG_BUTTON_SCANNING (//32)
+Searching...

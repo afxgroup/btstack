@@ -54,6 +54,10 @@
 #define MSG_SERVICE_STOPPED      1036
 #define MSG_VERSION_MISMATCH     1037
 #define MSG_COMMAND_FAILED       1038
+#define MSG_LOCAL_NAME           1039
+#define MSG_BUTTON_SET_NAME      1040
+#define MSG_HINT_LOCAL_NAME      1041
+#define MSG_BUTTON_SCANNING      1042
 
 #define MSG_WINDOW_TITLE_STR         "Bluetooth Devices"
 #define MSG_NEARBY_STR               "Nearby"
@@ -94,6 +98,10 @@
 #define MSG_SERVICE_STOPPED_STR      "The Bluetooth service is not running"
 #define MSG_VERSION_MISMATCH_STR     "Bluetooth Devices - service is a different version, update it"
 #define MSG_COMMAND_FAILED_STR       "Bluetooth Devices - the service refused that"
+#define MSG_LOCAL_NAME_STR           "This computer is known as"
+#define MSG_BUTTON_SET_NAME_STR      "Se_t"
+#define MSG_HINT_LOCAL_NAME_STR      "The name other devices see, and can connect to"
+#define MSG_BUTTON_SCANNING_STR      "Searching..."
 
 struct CatCompArrayType {
     LONG   cca_ID;
@@ -140,6 +148,10 @@ static const struct CatCompArrayType CatCompArray[] = {
     { MSG_SERVICE_STOPPED,     (STRPTR) MSG_SERVICE_STOPPED_STR },
     { MSG_VERSION_MISMATCH,    (STRPTR) MSG_VERSION_MISMATCH_STR },
     { MSG_COMMAND_FAILED,      (STRPTR) MSG_COMMAND_FAILED_STR },
+    { MSG_LOCAL_NAME,          (STRPTR) MSG_LOCAL_NAME_STR },
+    { MSG_BUTTON_SET_NAME,     (STRPTR) MSG_BUTTON_SET_NAME_STR },
+    { MSG_HINT_LOCAL_NAME,     (STRPTR) MSG_HINT_LOCAL_NAME_STR },
+    { MSG_BUTTON_SCANNING,     (STRPTR) MSG_BUTTON_SCANNING_STR },
 };
 
 #define CATCOMP_ARRAY_SIZE (sizeof(CatCompArray) / sizeof(CatCompArray[0]))

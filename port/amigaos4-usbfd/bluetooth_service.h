@@ -26,7 +26,7 @@
 #include <exec/ports.h>
 
 #define BLUETOOTH_SERVICE_PORT_NAME "bluetooth.service"
-#define BLUETOOTH_SERVICE_VERSION   2
+#define BLUETOOTH_SERVICE_VERSION   3
 
 /* how the service was asked to behave with a device */
 typedef enum {
@@ -71,6 +71,10 @@ typedef enum {
     BTCMD_SCAN_STOP,
     BTCMD_LIST_DEVICES,       /* fills the caller's BTDeviceInfo array */
 
+    /* the name other devices see us as, and can connect to us by */
+    BTCMD_GET_NAME,
+    BTCMD_SET_NAME,
+
     /* device */
     BTCMD_PAIR,
     BTCMD_UNPAIR,
@@ -114,6 +118,9 @@ typedef struct {
     BTDeviceInfo   * bsm_Devices;
     uint32           bsm_DevicesMax;
     uint32           bsm_DevicesCount;
+
+    /* GET_NAME fills this in, SET_NAME reads it */
+    char             bsm_Name[32];
 
     /* SUBSCRIBE_EVENTS: where to send BTServiceEvent messages */
     struct MsgPort * bsm_EventPort;
