@@ -136,6 +136,36 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
             DebugPrintF("hid classic: report descriptor available, status 0x%02x, %u bytes\n",
                         hid_subevent_descriptor_available_get_status(packet),
                         hid_descriptor_storage_get_descriptor_len(hid_cid));
+
+            /*
+             * Print the descriptor itself.
+             *
+             * The reports coming in fit two different layouts equally well -
+             * modifiers in the second byte, which is what a standard keyboard
+             * report does, or in the third with something else in the second -
+             * and the keys decode correctly either way, so the reports alone
+             * cannot say which. The descriptor can: it is the thing that
+             * defines where each field sits. It is printed once per connection
+             * and is a hundred and twenty bytes, which is worth it to stop
+             * guessing between two readings that both fit.
+             */
+            {
+                const uint8_t * d   = hid_descriptor_storage_get_descriptor_data(hid_cid);
+                uint16_t        len = hid_descriptor_storage_get_descriptor_len(hid_cid);
+                uint16_t        i;
+                char            line[3 * 16 + 1];
+
+                for (i = 0; (d != NULL) && (i < len); i++){
+                    uint16_t col = i & 0x0f;
+                    line[col * 3 + 0] = "0123456789abcdef"[d[i] >> 4];
+                    line[col * 3 + 1] = "0123456789abcdef"[d[i] & 0x0f];
+                    line[col * 3 + 2] = ' ';
+                    if ((col == 15) || (i + 1 == len)){
+                        line[col * 3 + 3] = 0;
+                        DebugPrintF("hid classic: desc %s\n", line);
+                    }
+                }
+            }
             break;
 
         case HID_SUBEVENT_SET_PROTOCOL_RESPONSE:
