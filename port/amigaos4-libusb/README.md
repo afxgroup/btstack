@@ -150,6 +150,28 @@ is what a driver feeding the input stream uses - the boot mouse, boot keyboard
 and HID drivers all do, and their history files say `IND_WRITEEVENT` is the OS3
 way, needing an input handler.
 
+## BluetoothGUI - managing devices
+
+A ReAction front end for the service. It holds no Bluetooth state and links
+against no part of BTstack: everything it shows arrives over the public message
+port and everything it does is a command sent there, so the service can be
+started, stopped or restarted underneath it.
+
+```
+BluetoothService        (start it first, or from bt.usbfd at boot)
+BluetoothGUI
+```
+
+Two lists, because they answer different questions. **Nearby** is what is being
+heard from right now, built from the sighting events the service sends rather
+than asked for - the service keeps no table entry for a device no handler can
+drive, since LE privacy addresses rotate and the supply is endless, but it
+announces every one. **Known devices** is what has been bonded, which persists
+and is what there is to manage: connect, disconnect, or forget.
+
+Scan also restarts the Classic inquiry, which the service stops by itself once
+everything it knows is connected - so it is the way to add a second keyboard.
+
 ## Bluetooth Classic keyboards
 
 Four things are needed to keep one connected, and none of them is obvious.

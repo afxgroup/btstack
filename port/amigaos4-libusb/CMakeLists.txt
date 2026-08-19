@@ -242,3 +242,8 @@ target_link_libraries(bthid btstack)
 
 add_executable(BluetoothService ${CMAKE_SOURCE_DIR}/bluetooth_service.c)
 target_link_libraries(BluetoothService btstack)
+
+# The GUI is a client of the service and nothing more: it speaks the public port
+# protocol and links against no part of BTstack.
+add_executable(BluetoothGUI ${CMAKE_SOURCE_DIR}/bluetooth_gui.c)
+target_include_directories(BluetoothGUI PRIVATE ${CMAKE_SOURCE_DIR}/../amigaos4-usbfd)
