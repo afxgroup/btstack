@@ -592,6 +592,47 @@ static void scan_resume_if_idle(void){
     scan_start(true);
 }
 
+/*
+ * Reconnect a bonded Classic device by paging it.
+ *
+ * Classic devices are only connected when an inquiry finds them, and a bonded
+ * keyboard sitting idle is never found by one: once paired it stops answering
+ * inquiry and only listens for a page. It is discoverable while the user holds
+ * it in pairing mode, which is why connecting worked every time it was tested
+ * by hand and never once at boot - by then the keyboard was simply awake and
+ * bonded, which is exactly the state it should reconnect from.
+ *
+ * So page it rather than wait to be told it exists. This is not the blind
+ * gap_connect() that had to be removed: a page is bounded by the controller's
+ * page timeout and fails in a few seconds if the device is off, where an LE
+ * connect would have waited for ever.
+ *
+ * Retried on a slow tick rather than every inquiry round, since each attempt at
+ * a device that is off costs a page timeout during which nothing else happens.
+ */
+#define CLASSIC_RECONNECT_EVERY 6   /* inquiry rounds, ~5 s each */
+static uint8_t classic_reconnect_countdown;
+
+static void classic_reconnect_bonded(void){
+    if (shutdown_requested)        return;
+    if (pending_device != NULL)    return;
+    if (controller_ready == false) return;
+
+    uint8_t i;
+    for (i = 0; i < MAX_DEVICES; i++){
+        bt_device_t * device = &devices[i];
+        if (!device->in_use)          continue;
+        if (!device->autoconnect)     continue;
+        if (device->info.addr_type != 0xff) continue;   /* Classic only */
+        if (device->con_handle != HCI_CON_HANDLE_INVALID) continue;
+        if (device->handler == NULL)  continue;
+
+        service_log("service: paging known device %s\n", bd_addr_to_str(device->info.bd_addr));
+        device_connect(device);
+        return;   /* one at a time - device_connect() refuses the rest anyway */
+    }
+}
+
 static void inquiry_start(void){
     inquiry_wanted = true;
     if (inquiring) return;
@@ -719,15 +760,46 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                             bd_addr_to_str(addr), ad_len, rssi);
             }
 
-            bool is_new = device_for_addr(addr) == NULL;
-            device = device_add(addr, addr_type);
-            if (device == NULL) break;
+            const bt_profile_handler_t * handler = bt_profile_handler_probe(ad_data, ad_len);
+
+            /*
+             * A slot is for a device we can do something with, not for whatever
+             * happens to be transmitting.
+             *
+             * LE privacy addresses rotate every few minutes, so the supply of
+             * addresses in range is effectively endless: storing each one filled
+             * the table, and then every new advertisement evicted an older entry
+             * and was itself evicted moments later. One boot produced six
+             * thousand "found" lines that way, all of them beacons, none of them
+             * anything we could drive.
+             *
+             * So a device earns a slot by being one a handler wants, or one we
+             * already know. The rest are still announced to whoever is
+             * listening on the port - a GUI wanting to show what is nearby gets
+             * the sighting as it happens - they just do not take up residence.
+             */
+            device = device_for_addr(addr);
+            bool is_new = (device == NULL);
+
+            if (device == NULL){
+                if (handler == NULL){
+                    BTDeviceInfo seen;
+                    memset(&seen, 0, sizeof(seen));
+                    memcpy(seen.bd_addr, addr, 6);
+                    seen.addr_type = addr_type;
+                    seen.rssi      = rssi;
+                    seen.state     = BT_DEVICE_STATE_FOUND;
+                    bt_service_port_notify(BTEVENT_DEVICE_FOUND, &seen, 0);
+                    break;
+                }
+                device = device_add(addr, addr_type);
+                if (device == NULL) break;
+            }
 
             device->info.rssi = rssi;
 
             /* remember which handler wants it, so connecting is a decision the
              * user makes and not a guess made later */
-            const bt_profile_handler_t * handler = bt_profile_handler_probe(ad_data, ad_len);
             if (handler != NULL){
                 device->handler   = handler;
                 device->info.kind = handler->kind;
@@ -871,6 +943,12 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             /* inquiry is bounded, so keep it going for as long as we are
              * looking - otherwise a Classic device switched on a minute later
              * would never be found */
+            if (classic_reconnect_countdown == 0){
+                classic_reconnect_countdown = CLASSIC_RECONNECT_EVERY;
+                classic_reconnect_bonded();
+            } else {
+                classic_reconnect_countdown--;
+            }
             if (inquiry_wanted && !shutdown_requested){
                 inquiry_start();
             }
