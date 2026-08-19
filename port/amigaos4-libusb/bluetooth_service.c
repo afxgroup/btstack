@@ -202,6 +202,18 @@ static void service_log(const char * format, ...){
 /* require LE Secure Connections, refusing devices that only do legacy pairing */
 static bool secure_connections_only;
 
+/*
+ * Start with no bonds at all.
+ *
+ * A device held in pairing mode is waiting to create a new bond, and will not
+ * settle for being authenticated with the key from an old one - it accepts the
+ * connection, never completes its own pairing, and drops the link when its
+ * pairing window closes. Having a stale key for such a device is therefore
+ * worse than having none, and there was no way to get rid of one short of
+ * deleting the TLV file by hand and losing every other device with it.
+ */
+static bool forget_all;
+
 /* -------------------------------------------------------------------------- */
 /* device table                                                               */
 
@@ -778,6 +790,19 @@ static void scan_start(bool autoconnect){
  * the advertising report below.
  */
 static void service_start_working(void){
+
+    if (forget_all){
+        /* the TLV instance is what devices_load() would fetch, and both the
+         * link keys and our own list live in it */
+        btstack_tlv_get_instance(&tlv_impl, &tlv_context);
+        gap_delete_all_link_keys();
+        if (tlv_impl != NULL){
+            tlv_impl->delete_tag(tlv_context, TLV_TAG_DEVICES);
+        }
+        memset(devices, 0, sizeof(devices));
+        service_log("service: all bonds forgotten, pair everything again\n");
+    }
+
     devices_load();
     scan_start(true);
 }
@@ -1333,6 +1358,9 @@ int btstack_main(int argc, const char * argv[]){
         }
         if (strcmp(argv[i], "--secure-only") == 0){
             secure_connections_only = true;
+        }
+        if (strcmp(argv[i], "--forget-all") == 0){
+            forget_all = true;
         }
     }
     bt_handler_hid_set_verbose(verbose);
