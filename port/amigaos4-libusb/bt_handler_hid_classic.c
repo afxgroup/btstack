@@ -39,6 +39,8 @@ static uint8_t hid_descriptor_storage[500];
 static uint16_t         hid_cid;
 static hci_con_handle_t hid_con_handle = HCI_CON_HANDLE_INVALID;
 static bd_addr_t        hid_addr;
+static uint16_t         sniff_max_latency;
+static uint16_t         sniff_min_timeout;
 
 /* -------------------------------------------------------------------------- */
 
@@ -82,6 +84,22 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
             break;
         }
 
+        case HID_SUBEVENT_SNIFF_SUBRATING_PARAMS:
+            /*
+             * What the device asks for to be allowed to doze between reports.
+             *
+             * These come out of its SDP record and arrive before the connection
+             * is reported open, so they are kept until there is a handle to
+             * apply them to. A keyboard that is refused this does not stay
+             * awake to keep us happy - it goes quiet anyway, and the link dies
+             * of supervision timeout a minute later.
+             */
+            sniff_max_latency = hid_subevent_sniff_subrating_params_get_host_max_latency(packet);
+            sniff_min_timeout = hid_subevent_sniff_subrating_params_get_host_min_timeout(packet);
+            DebugPrintF("hid classic: sniff subrating, max latency %u, min timeout %u\n",
+                        sniff_max_latency, sniff_min_timeout);
+            break;
+
         case HID_SUBEVENT_CONNECTION_OPENED: {
             uint8_t status = hid_subevent_connection_opened_get_status(packet);
             hid_subevent_connection_opened_get_bd_addr(packet, hid_addr);
@@ -95,6 +113,15 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
             hid_con_handle = hid_subevent_connection_opened_get_con_handle(packet);
             DebugPrintF("hid classic: connected to %s, cid 0x%04x\n",
                         bd_addr_to_str(hid_addr), hid_cid);
+            /* now there is a handle to apply the device's own sniff request to */
+            if (sniff_max_latency != 0){
+                uint8_t sniff_status = gap_sniff_subrating_configure(hid_con_handle,
+                                                                    sniff_max_latency,
+                                                                    sniff_min_timeout,
+                                                                    sniff_min_timeout);
+                DebugPrintF("hid classic: sniff subrating configured, status 0x%02x\n", sniff_status);
+            }
+
             bt_profile_handler_report_status(&bt_handler_hid_classic, hid_addr, hid_con_handle, true, ERROR_CODE_SUCCESS);
             break;
         }

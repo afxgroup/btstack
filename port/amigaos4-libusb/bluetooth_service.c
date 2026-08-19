@@ -1337,6 +1337,24 @@ int btstack_main(int argc, const char * argv[]){
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_DISPLAY_ONLY);
     gap_set_page_timeout(PAGE_TIMEOUT_SLOTS);
 
+    /*
+     * Let the controller agree to sniff mode.
+     *
+     * BTstack leaves the default link policy at zero, which disallows all of
+     * it, so the controller refuses every sniff request a device makes. A
+     * keyboard asks: it runs on batteries and cannot stay fully awake between
+     * keystrokes. Refused, it does not helpfully stay awake anyway - it goes
+     * quiet, and about a minute later the link dies of supervision timeout,
+     * reason 0x08, with neither side having hung up. That is precisely what a
+     * keyboard that worked while its pairing light blinked and stopped when it
+     * settled down was telling us.
+     *
+     * Role switch is allowed for the same reason it usually is: a peripheral
+     * that wants to be master of its own link should be able to ask.
+     */
+    gap_set_default_link_policy_settings(LM_LINK_POLICY_ENABLE_ROLE_SWITCH |
+                                         LM_LINK_POLICY_ENABLE_SNIFF_MODE);
+
     /* no ATT server: we are a central, and running one opens a re-entrancy in
      * att_server that recurses until the stack overflows. See bthid.c. */
 
