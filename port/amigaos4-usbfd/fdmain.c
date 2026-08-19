@@ -20,6 +20,7 @@
 
 #include <string.h>
 
+#include <usb/usb.h>
 #include <usb/devclasses.h>
 #include <usb/system.h>
 
@@ -80,9 +81,11 @@ int fdmain_register(void)
 
     if ((MyFDKey != NULL) || ((MyFDKey == NULL) && (err == USBERR_ISPRESENT)))
     {
+        IExec->DebugPrintF("[bt.usbfd] registered with the USB stack\n");
         return TRUE;
     }
 
+    IExec->DebugPrintF("[bt.usbfd] registration failed, error %ld\n", (long)err);
     return FALSE;
 }
 
@@ -145,63 +148,92 @@ static BOOL bt_service_command(bt_command_t command)
 }
 
 /*
+ * Trace to the serial debug output.
+ *
+ * The console does not exist yet at the point this driver runs, and neither
+ * does anything else that could record what happened: at boot the only way to
+ * see how far we got is the serial log, next to the [DOS] and [_impl_
+ * InitResident] lines the kernel prints there.
+ */
+#define BTFD_LOG(...) IExec->DebugPrintF("[bt.usbfd] " __VA_ARGS__)
+
+/*
  * Has the USB stack finished booting?
  *
  * Before that it is "prebooted": running on preloaded drivers, deliberately as
  * if dos.library were not around - because it may not be. A dongle already
  * plugged in at power on gets us called right there, and touching DOS at that
- * point does not fail cleanly, it hangs the boot: the machine never reaches
- * Workbench. Nothing here is urgent enough to justify that, and the attach is
- * reported again once the stack fullboots.
+ * point does not fail cleanly, it hangs the boot.
+ *
+ * The already-open usbsys.device from the startup message is used rather than
+ * opening it here: we are called from inside the USB stack, which may well hold
+ * a lock on itself while doing so, and opening its device from that context is
+ * asking for a deadlock. The message documents USBReq as being there for
+ * exactly this, and says not to close it.
  */
-static BOOL usb_stack_fullbooted(void)
+static BOOL usb_stack_fullbooted(struct USBFDStartupMsg *startmsg)
 {
-    struct Library     *USBSysBase;
-    struct MsgPort     *port;
-    struct IORequest   *ioreq;
     struct USBSysIFace *IUSBSys;
     uint32              fullbooted = FALSE;
 
-    /* usbsys is a device, so getting at its interface means an IORequest */
-    port = IExec->AllocSysObjectTags(ASOT_PORT, TAG_END);
-    if (port == NULL)
-        return FALSE;
-
-    ioreq = IExec->AllocSysObjectTags(ASOT_IOREQUEST,
-                                      ASOIOR_Size,      sizeof(struct IOStdReq),
-                                      ASOIOR_ReplyPort, port,
-                                      TAG_END);
-    if (ioreq == NULL)
+    if ((startmsg == NULL) || (startmsg->USBReq == NULL))
     {
-        IExec->FreeSysObject(ASOT_PORT, port);
+        BTFD_LOG("no USBReq in the startup message\n");
         return FALSE;
     }
 
-    if (IExec->OpenDevice("usbsys.device", 0, ioreq, 0) == 0)
+    IUSBSys = (struct USBSysIFace *)IExec->GetInterface(
+        (struct Library *)startmsg->USBReq->io_Device, "main", 1, NULL);
+    if (IUSBSys == NULL)
     {
-        USBSysBase = (struct Library *)ioreq->io_Device;
-        IUSBSys = (struct USBSysIFace *)IExec->GetInterface(USBSysBase, "main", 1, NULL);
-        if (IUSBSys)
-        {
-            IUSBSys->USBGetStackAttrs(USBA_Stack_Fullbooted, &fullbooted, TAG_END);
-            IExec->DropInterface((struct Interface *)IUSBSys);
-        }
-        IExec->CloseDevice(ioreq);
+        BTFD_LOG("cannot get the usbsys interface\n");
+        return FALSE;
     }
 
-    IExec->FreeSysObject(ASOT_IOREQUEST, ioreq);
-    IExec->FreeSysObject(ASOT_PORT, port);
+    IUSBSys->USBGetStackAttrs(USBA_Stack_Fullbooted, &fullbooted, TAG_END);
+    IExec->DropInterface((struct Interface *)IUSBSys);
 
     return fullbooted ? TRUE : FALSE;
 }
 
 /*
- * Start the service if it is not running yet.
+ * Is there a filesystem to load the service from yet?
  *
- * Started detached with SystemTags(): a function driver must not wait for a
- * program to finish, and the service outlives us anyway. Only ever called once
- * usb_stack_fullbooted() says there is a DOS to start it with.
+ * The USB stack fullbooting means dos.library is available, which is not the
+ * same as the boot volume being mounted and C: pointing at it. SystemTags()
+ * would then block waiting for something that is not there, and it would block
+ * us inside the USB stack. Requesters are turned off for the check: asking the
+ * user to insert a volume, on a machine still booting, with no Workbench to
+ * show the requester on, is the last thing this should do.
  */
+static BOOL bt_service_available(void)
+{
+    struct Library  *DOSBase;
+    struct DOSIFace *IDOS;
+    BOOL             available = FALSE;
+
+    DOSBase = IExec->OpenLibrary("dos.library", 50);
+    if (DOSBase == NULL)
+        return FALSE;
+
+    IDOS = (struct DOSIFace *)IExec->GetInterface(DOSBase, "main", 1, NULL);
+    if (IDOS != NULL)
+    {
+        APTR old_window = IDOS->SetProcWindow((APTR)-1);
+        BPTR lock = IDOS->Lock(BLUETOOTH_SERVICE_COMMAND, SHARED_LOCK);
+        if (lock != ZERO)
+        {
+            IDOS->UnLock(lock);
+            available = TRUE;
+        }
+        IDOS->SetProcWindow(old_window);
+        IExec->DropInterface((struct Interface *)IDOS);
+    }
+
+    IExec->CloseLibrary(DOSBase);
+    return available;
+}
+
 static void bt_service_start(void)
 {
     struct Library  *DOSBase;
@@ -226,6 +258,8 @@ static void bt_service_start(void)
         BPTR nil_in  = IDOS->Open("NIL:", MODE_OLDFILE);
         BPTR nil_out = IDOS->Open("NIL:", MODE_NEWFILE);
 
+        BTFD_LOG("launching %s\n", BLUETOOTH_SERVICE_COMMAND);
+
         IDOS->SystemTags(BLUETOOTH_SERVICE_COMMAND,
                          SYS_Input,   nil_in,
                          SYS_Output,  nil_out,
@@ -236,6 +270,7 @@ static void bt_service_start(void)
                          TAG_END);
         /* with SYS_Asynch the file handles belong to the new process */
 
+        BTFD_LOG("launched\n");
         IExec->DropInterface((struct Interface *)IDOS);
     }
 
@@ -254,6 +289,12 @@ int fdmain(struct USBFDStartupMsg *startmsg)
 
     (void)descriptor;
 
+    BTFD_LOG("attach: interface %u, class %02x/%02x/%02x\n",
+             descriptor ? descriptor->id_InterfaceID : 0xff,
+             descriptor ? descriptor->id_Class : 0,
+             descriptor ? descriptor->id_Subclass : 0,
+             descriptor ? descriptor->id_Protocol : 0);
+
     /*
      * Do nothing at all until the USB stack has fullbooted. With a dongle
      * plugged in at power on we are called during the prebooted phase, where
@@ -262,8 +303,19 @@ int fdmain(struct USBFDStartupMsg *startmsg)
      * device once it has fullbooted, which is when there is a system to run the
      * service on.
      */
-    if (usb_stack_fullbooted() == FALSE)
+    if (usb_stack_fullbooted(startmsg) == FALSE)
+    {
+        BTFD_LOG("stack not fullbooted yet, doing nothing\n");
         return USBERR_NOERROR;
+    }
+    BTFD_LOG("stack is fullbooted\n");
+
+    if (bt_service_available() == FALSE)
+    {
+        BTFD_LOG("%s not reachable yet, leaving it to WBStartup\n", BLUETOOTH_SERVICE_COMMAND);
+        return USBERR_NOERROR;
+    }
+    BTFD_LOG("%s is reachable\n", BLUETOOTH_SERVICE_COMMAND);
 
     /*
      * Attach: make sure the service is up, then tell it a controller is there.
@@ -271,7 +323,9 @@ int fdmain(struct USBFDStartupMsg *startmsg)
      * not listening yet, and finds the controller by scanning USB itself.
      */
     bt_service_start();
+    BTFD_LOG("notifying the service\n");
     bt_service_command(BTCMD_CONTROLLER_ATTACHED);
+    BTFD_LOG("done\n");
 
     /*
      * TODO: to also get the removal notification, the interface has to be
