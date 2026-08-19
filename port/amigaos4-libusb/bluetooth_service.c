@@ -897,6 +897,46 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             sm_request_pairing(pending_device->con_handle);
             break;
 
+        /*
+         * Whether the link is encrypted, and whether a bond exists.
+         *
+         * These are always logged, not just with -v: they are rare, and they
+         * answer the one question the rest of the log cannot. A Classic
+         * keyboard will connect, hand over its report descriptor and then send
+         * not a single keystroke until the link is encrypted - which looks
+         * exactly like a working connection that happens to be silent. Knowing
+         * whether encryption ever happened is the difference between that and
+         * a keyboard that simply considers some other host to be its active one.
+         */
+        case HCI_EVENT_ENCRYPTION_CHANGE:
+            service_log("service: encryption %s on handle 0x%04x, status 0x%02x\n",
+                        hci_event_encryption_change_get_encryption_enabled(packet) ? "on" : "off",
+                        hci_event_encryption_change_get_connection_handle(packet),
+                        hci_event_encryption_change_get_status(packet));
+            break;
+
+        case HCI_EVENT_AUTHENTICATION_COMPLETE:
+            service_log("service: authentication on handle 0x%04x, status 0x%02x\n",
+                        hci_event_authentication_complete_get_connection_handle(packet),
+                        hci_event_authentication_complete_get_status(packet));
+            break;
+
+        case HCI_EVENT_LINK_KEY_REQUEST:
+            reverse_bd_addr(&packet[2], addr);
+            service_log("service: %s asked for its link key\n", bd_addr_to_str(addr));
+            break;
+
+        case HCI_EVENT_LINK_KEY_NOTIFICATION:
+            reverse_bd_addr(&packet[2], addr);
+            service_log("service: %s bonded, link key stored\n", bd_addr_to_str(addr));
+            break;
+
+        case HCI_EVENT_CONNECTION_COMPLETE:
+            reverse_bd_addr(&packet[5], addr);
+            service_log("service: classic link to %s, status 0x%02x\n",
+                        bd_addr_to_str(addr), packet[2]);
+            break;
+
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
             hci_con_handle_t con_handle = hci_event_disconnection_complete_get_connection_handle(packet);
             device = device_for_handle(con_handle);

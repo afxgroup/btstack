@@ -128,6 +128,14 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
         }
 
         default:
+            /*
+             * Anything else the HID host has to say. It is normally nothing,
+             * so printing it costs no noise - and if a device refuses report
+             * protocol, or suspends, this is where that shows up instead of
+             * disappearing into a silent default case.
+             */
+            DebugPrintF("hid classic: subevent 0x%02x\n",
+                        hci_event_hid_meta_get_subevent_code(packet));
             break;
     }
 }
