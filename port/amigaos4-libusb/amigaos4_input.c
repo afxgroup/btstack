@@ -135,6 +135,79 @@ static uint8_t              input_queue_max;
 /* time stamp of the last movement event we sent, for the rate limit */
 static uint32_t             input_last_move_us;
 
+/*
+ * Key repeat, which is ours to generate.
+ *
+ * input.device stores the delay and rate the user chose and publishes them -
+ * IND_GETTHRESH and IND_GETPERIOD to read them, and a notification hook to hear
+ * about changes - but it does not apply them to what comes through it. That is
+ * the keyboard driver's job, and feeding input.device is what this is, so a key
+ * held down produced exactly one event and backspace deleted one character
+ * however long it was held.
+ *
+ * Only one key repeats: the last one pressed, as on any keyboard. Modifiers
+ * never do - a held shift is a state, not something to be sent over and over.
+ *
+ * The repeats come out of amigaos4_input_poll(), so the rate cannot be finer
+ * than the caller polls - about 50 ms with the run loop this ships with, which
+ * is close enough to the usual setting to feel normal. Getting the exact rate
+ * would mean this file knowing about the run loop, and keeping it independent
+ * of Bluetooth entirely is worth more than the last few milliseconds.
+ */
+#define REPEAT_NONE 0xFFFF
+
+static uint16_t repeat_code = REPEAT_NONE;
+static uint16_t repeat_qualifier;
+static uint32_t repeat_due_us;
+static uint32_t repeat_threshold_us = 500000;  /* until input.device is asked */
+static uint32_t repeat_period_us    =  40000;
+
+/*
+ * Amiga raw key codes 0x60..0x67 are the qualifier keys - both shifts, caps
+ * lock, control, both alts and both Amiga keys.
+ */
+static bool key_is_modifier(uint16_t rawkey){
+    return (rawkey >= 0x60) && (rawkey <= 0x67);
+}
+
+/*
+ * Ask input.device what the user chose for repeat delay and rate.
+ *
+ * These live in Prefs/Input and belong to the whole machine, so a Bluetooth
+ * keyboard has to repeat at the same speed as every other one - inventing our
+ * own numbers would make it the odd one out. Both commands are V50; if either
+ * is refused the built-in defaults stand, which is a keyboard that repeats
+ * slightly wrong rather than one that does not repeat at all.
+ */
+static void repeat_read_settings(struct MsgPort * port, struct Device * device){
+
+    struct TimeRequest * request = AllocSysObjectTags(ASOT_IOREQUEST,
+                                                      ASOIOR_Size,      sizeof(struct TimeRequest),
+                                                      ASOIOR_ReplyPort, port,
+                                                      TAG_END);
+    if (request == NULL) return;
+
+    request->Request.io_Device = device;
+    request->Request.io_Unit   = NULL;
+
+    request->Request.io_Command = IND_GETTHRESH;
+    if (DoIO((struct IORequest *) request) == 0){
+        repeat_threshold_us = (uint32_t) (request->Time.Seconds * 1000000 +
+                                          request->Time.Microseconds);
+    }
+
+    request->Request.io_Command = IND_GETPERIOD;
+    if (DoIO((struct IORequest *) request) == 0){
+        repeat_period_us = (uint32_t) (request->Time.Seconds * 1000000 +
+                                       request->Time.Microseconds);
+    }
+
+    /* a period of zero would repeat once per poll and flood the input chain */
+    if (repeat_period_us < 10000) repeat_period_us = 10000;
+
+    FreeSysObject(ASOT_IOREQUEST, request);
+}
+
 static uint32_t input_now_us(void){
     if (itimer == NULL) return 0;
     struct TimeVal now;
@@ -361,6 +434,18 @@ static void input_write_event(uint8_t class, uint16_t code, uint16_t qualifier,
 
 void amigaos4_input_poll(void){
     if (input_open == false) return;
+
+    if (repeat_code != REPEAT_NONE){
+        uint32_t now = input_now_us();
+        /* unsigned subtraction, so this survives the microsecond counter
+         * wrapping rather than repeating for the next hour and a half */
+        if ((uint32_t) (now - repeat_due_us) < 0x80000000u){
+            input_write_event(IECLASS_RAWKEY, repeat_code,
+                              repeat_qualifier | IEQUALIFIER_REPEAT, 0, 0);
+            repeat_due_us = now + repeat_period_us;
+        }
+    }
+
     input_flush();
 }
 
@@ -401,6 +486,8 @@ bool amigaos4_input_open(void){
         input_port = NULL;
         return false;
     }
+
+    repeat_read_settings(input_port, input_req->io_Device);
     input_device = input_req->io_Device;
 
     /* One request per slot, all replying to our port. They are copies of the
@@ -452,6 +539,10 @@ bool amigaos4_input_open(void){
 }
 
 void amigaos4_input_close(void){
+
+    /* nothing may be left repeating for a keyboard that has gone */
+    repeat_code = REPEAT_NONE;
+
 
     if (input_open == false) return;
 
@@ -569,6 +660,15 @@ void amigaos4_input_key(uint16_t rawkey, bool pressed, uint16_t qualifier){
      * keyboard fits in IECLASS_RAWKEY.
      */
     if (rawkey > 0xFF) return;
+
+    if (pressed && !key_is_modifier(rawkey)){
+        /* the newest key is the one that repeats, replacing any before it */
+        repeat_code      = rawkey;
+        repeat_qualifier = qualifier;
+        repeat_due_us    = input_now_us() + repeat_threshold_us;
+    } else if (!pressed && (rawkey == repeat_code)){
+        repeat_code = REPEAT_NONE;
+    }
 
     input_write_event(IECLASS_RAWKEY,
                       rawkey | (pressed ? 0 : IECODE_UP_PREFIX),
