@@ -933,7 +933,16 @@ static void scan_start(bool autoconnect){
     gap_set_scan_parameters(1, 96, 24);
     gap_start_scan();
     scanning = true;
-    bt_service_port_notify(BTEVENT_SCAN_STARTED, NULL, 0);
+    /*
+     * Deliberately no BTEVENT_SCAN_STARTED here.
+     *
+     * This scan is permanent infrastructure - it is how a known device is
+     * noticed coming back into range - and it starts before any client exists
+     * to hear about it. Reporting it as a scan starting made the event mean two
+     * different things, and a GUI could only ever catch the one it was not
+     * present for. The event now means an explicit discovery, which is the only
+     * kind anybody asked for and the only kind that ends.
+     */
     service_log("service: scanning%s\n", autoconnect ? " (connecting to what we can drive)" : "");
 
     /* Classic devices are found by inquiry, never by this scan */
@@ -1545,7 +1554,18 @@ static bt_result_t handle_command(BTServiceMsg * msg){
             return BT_RESULT_OK;
 
         case BTCMD_SUBSCRIBE_EVENTS:
-            return bt_service_port_subscribe(msg->bsm_EventPort) ? BT_RESULT_OK : BT_RESULT_BUSY;
+            if (!bt_service_port_subscribe(msg->bsm_EventPort)) return BT_RESULT_BUSY;
+            /*
+             * Tell it what is true now, not just what changes next.
+             *
+             * A subscriber only ever hears about changes, so one that starts
+             * while a discovery is running had no way to know - it showed the
+             * button as idle until the discovery ended, which is the one moment
+             * it would be told, and by then it was right for the wrong reason.
+             */
+            bt_service_port_notify(inquiry_requested ? BTEVENT_SCAN_STARTED
+                                                     : BTEVENT_SCAN_STOPPED, NULL, 0);
+            return BT_RESULT_OK;
 
         case BTCMD_UNSUBSCRIBE_EVENTS:
             bt_service_port_unsubscribe(msg->bsm_EventPort);
