@@ -113,3 +113,9 @@ Stop the Bluetooth service and disconnect everything
 ;
 MSG_SERVICE_STOPPED (//128)
 The Bluetooth service is not running
+;
+MSG_VERSION_MISMATCH (//128)
+Bluetooth Devices - service is a different version, update it
+;
+MSG_COMMAND_FAILED (//128)
+Bluetooth Devices - the service refused that

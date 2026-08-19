@@ -114,6 +114,8 @@ static void close_class(struct Library * base, APTR interface){
 
 #define MAX_DEVICES 32
 
+static struct Window * window;
+
 static struct MsgPort * reply_port;
 static struct MsgPort * event_port;
 static bool             subscribed;
@@ -127,6 +129,20 @@ static bool             subscribed;
  * task owning it could be gone, and a message sent to a freed port is not an
  * error that can be recovered from afterwards.
  */
+/*
+ * Say so in the title bar when something goes wrong.
+ *
+ * Every command result used to be discarded, so a service that refused
+ * everything looked exactly like one with nothing to report: the window came up
+ * saying the service was running and then stayed empty, with no way to tell
+ * which. A version mismatch is the likely reason and worth naming, since the
+ * fix is to update the other half.
+ */
+static void status_show(LONG message_id){
+    if (window == NULL) return;
+    SetWindowTitles(window, (CONST_STRPTR) GetString(message_id), (CONST_STRPTR) -1);
+}
+
 static bt_result_t bt_command(bt_command_t command, const uint8 * addr, uint8 addr_type,
                               BTDeviceInfo * devices, uint32 devices_max, uint32 * devices_count){
 
@@ -161,6 +177,15 @@ static bt_result_t bt_command(bt_command_t command, const uint8 * addr, uint8 ad
     }
 
     if (devices_count != NULL) *devices_count = msg.bsm_DevicesCount;
+
+    if (msg.bsm_Result == BT_RESULT_UNSUPPORTED){
+        status_show(MSG_VERSION_MISMATCH);
+    } else if (msg.bsm_Result != BT_RESULT_OK){
+        status_show(MSG_COMMAND_FAILED);
+    } else {
+        status_show(MSG_WINDOW_TITLE);
+    }
+
     return msg.bsm_Result;
 }
 
@@ -316,7 +341,6 @@ static Object * gad_connect;
 static Object * gad_disconnect;
 static Object * gad_forget;
 static Object * gad_service;
-static struct Window * window;
 
 /* the listbrowser must not be looking at a list while it is being rebuilt */
 static int32 selected_row(Object * gadget);

@@ -52,6 +52,8 @@
 #define MSG_HINT_START_SERVICE   1034
 #define MSG_HINT_STOP_SERVICE    1035
 #define MSG_SERVICE_STOPPED      1036
+#define MSG_VERSION_MISMATCH     1037
+#define MSG_COMMAND_FAILED       1038
 
 #define MSG_WINDOW_TITLE_STR         "Bluetooth Devices"
 #define MSG_NEARBY_STR               "Nearby"
@@ -90,6 +92,8 @@
 #define MSG_HINT_START_SERVICE_STR   "Start the Bluetooth service, so devices can connect"
 #define MSG_HINT_STOP_SERVICE_STR    "Stop the Bluetooth service and disconnect everything"
 #define MSG_SERVICE_STOPPED_STR      "The Bluetooth service is not running"
+#define MSG_VERSION_MISMATCH_STR     "Bluetooth Devices - service is a different version, update it"
+#define MSG_COMMAND_FAILED_STR       "Bluetooth Devices - the service refused that"
 
 struct CatCompArrayType {
     LONG   cca_ID;
@@ -134,6 +138,8 @@ static const struct CatCompArrayType CatCompArray[] = {
     { MSG_HINT_START_SERVICE,  (STRPTR) MSG_HINT_START_SERVICE_STR },
     { MSG_HINT_STOP_SERVICE,   (STRPTR) MSG_HINT_STOP_SERVICE_STR },
     { MSG_SERVICE_STOPPED,     (STRPTR) MSG_SERVICE_STOPPED_STR },
+    { MSG_VERSION_MISMATCH,    (STRPTR) MSG_VERSION_MISMATCH_STR },
+    { MSG_COMMAND_FAILED,      (STRPTR) MSG_COMMAND_FAILED_STR },
 };
 
 #define CATCOMP_ARRAY_SIZE (sizeof(CatCompArray) / sizeof(CatCompArray[0]))
