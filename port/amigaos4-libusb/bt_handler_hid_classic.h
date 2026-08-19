@@ -23,6 +23,9 @@ extern "C" {
 
 extern const bt_profile_handler_t bt_handler_hid_classic;
 
+/* log every report as received, to compare it against the descriptor */
+void bt_handler_hid_classic_set_verbose(bool enabled);
+
 #if defined __cplusplus
 }
 #endif

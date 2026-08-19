@@ -47,6 +47,7 @@
 
 #include "amigaos4_input.h"
 #include "bt_handler_hid.h"
+#include "bt_handler_hid_classic.h"
 #include "bt_profile_handler.h"
 #include "bt_service_port.h"
 #include "btstack_run_loop_amigaos.h"
@@ -1405,6 +1406,7 @@ int btstack_main(int argc, const char * argv[]){
         }
     }
     bt_handler_hid_set_verbose(verbose);
+    bt_handler_hid_classic_set_verbose(verbose);
 
     have_console = (IsInteractive(Output()) == DOSTRUE);
 

@@ -39,6 +39,7 @@ static uint8_t hid_descriptor_storage[500];
 static uint16_t         hid_cid;
 static hci_con_handle_t hid_con_handle = HCI_CON_HANDLE_INVALID;
 static bd_addr_t        hid_addr;
+static bool             verbose;
 static uint16_t         sniff_max_latency;
 static uint16_t         sniff_min_timeout;
 
@@ -132,8 +133,25 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
              * boot protocol descriptor until it does - which is why
              * bt_hid_report_process() falls back to it rather than refusing.
              */
-            DebugPrintF("hid classic: report descriptor available, status 0x%02x\n",
-                        hid_subevent_descriptor_available_get_status(packet));
+            DebugPrintF("hid classic: report descriptor available, status 0x%02x, %u bytes\n",
+                        hid_subevent_descriptor_available_get_status(packet),
+                        hid_descriptor_storage_get_descriptor_len(hid_cid));
+            break;
+
+        case HID_SUBEVENT_SET_PROTOCOL_RESPONSE:
+            /*
+             * Which report layout the device is actually using.
+             *
+             * An incoming connection is accepted in report mode, so the host
+             * sends SET_PROTOCOL and the device answers here. It matters
+             * because the two layouts differ: a boot keyboard report is eight
+             * bytes with no report ID, a report mode one starts with the ID. If
+             * the device ends up in one and we decode with the descriptor for
+             * the other, every field is off and what comes out is not the key
+             * that was pressed.
+             */
+            DebugPrintF("hid classic: set protocol response, handshake 0x%02x\n",
+                        hid_subevent_set_protocol_response_get_handshake_status(packet));
             break;
 
         case HID_SUBEVENT_REPORT: {
@@ -158,6 +176,21 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
             if (report[0] != 0xa1) break;
             report++;
             report_len--;
+
+            if (verbose){
+                char hex[3 * 16 + 1];
+                uint16_t n = (report_len < 16) ? report_len : 16;
+                uint16_t k;
+                for (k = 0; k < n; k++){
+                    hex[k * 3 + 0] = "0123456789abcdef"[report[k] >> 4];
+                    hex[k * 3 + 1] = "0123456789abcdef"[report[k] & 0x0f];
+                    hex[k * 3 + 2] = ' ';
+                }
+                hex[n * 3] = 0;
+                DebugPrintF("hid classic: report %s(%u bytes, descriptor %u bytes)\n",
+                            hex, report_len,
+                            hid_descriptor_storage_get_descriptor_len(hid_cid));
+            }
 
             bt_hid_report_process(hid_descriptor_storage_get_descriptor_data(hid_cid),
                                   hid_descriptor_storage_get_descriptor_len(hid_cid),
@@ -190,6 +223,10 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
 }
 
 /* -------------------------------------------------------------------------- */
+
+void bt_handler_hid_classic_set_verbose(bool enabled){
+    verbose = enabled;
+}
 
 static void hid_classic_init(void){
     hid_host_init(hid_descriptor_storage, sizeof(hid_descriptor_storage));
