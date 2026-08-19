@@ -1392,6 +1392,27 @@ int btstack_main(int argc, const char * argv[]){
      */
     gap_set_default_link_policy_settings(LM_LINK_POLICY_ENABLE_SNIFF_MODE | LM_LINK_POLICY_ENABLE_ROLE_SWITCH);
     hci_set_master_slave_policy(HCI_ROLE_MASTER);
+    /*
+     * Be reachable, not just findable.
+     *
+     * BTstack builds the scan enable value as (connectable << 1) | discoverable
+     * - bit 1 is page scan, bit 0 is inquiry scan - and connectable defaults to
+     * off. Asking only for discoverable therefore left page scan disabled, so
+     * nothing could ever connect to us; we could find devices and dial them,
+     * and that is all.
+     *
+     * That is fatal for a keyboard. A bonded HID keyboard does not sit waiting
+     * to be dialled: it sleeps, and when a key is pressed it pages its host to
+     * reconnect. With page scan off those pages went nowhere. It could only be
+     * reached by us calling it, which works only while it is in pairing mode
+     * and answering inquiry - so it ran perfectly for as long as the pairing
+     * light blinked and stopped when that expired, every single time, while an
+     * LE mouse on a completely different path was unaffected.
+     *
+     * It also means HID_SUBEVENT_INCOMING_CONNECTION could never arrive, and
+     * the code handling it had never once run.
+     */
+    gap_connectable_control(1);
     gap_discoverable_control(1);
 
     /*
