@@ -44,6 +44,7 @@ extern struct USBResourceIFace *IUSBResource;
 
 /* started when a controller shows up and no service is running yet */
 #define BLUETOOTH_SERVICE_COMMAND "C:BluetoothService"
+#define BLUETOOTH_SERVICE_LOG     "T:BluetoothService.log"
 
 static APTR MyFDKey;
 
@@ -269,13 +270,30 @@ static void bt_service_start(void)
     if (IDOS != NULL)
     {
         BPTR nil_in  = IDOS->Open("NIL:", MODE_OLDFILE);
-        BPTR nil_out = IDOS->Open("NIL:", MODE_NEWFILE);
 
-        BTFD_LOG("launching %s\n", BLUETOOTH_SERVICE_COMMAND);
+        /*
+         * Keep what the service prints, rather than throwing it away.
+         *
+         * This used to be NIL:, which meant a service started at boot could
+         * fail for any reason at all and leave nothing behind - not one line,
+         * anywhere. Most of what it prints on the way up comes from BTstack
+         * itself, so it cannot simply be routed to serial from in there: the
+         * firmware paths, the USB device it picked and the address it came up
+         * on are all plain printf. A file keeps all of it.
+         *
+         * NIL: is still the fallback, since a boot where T: does not exist yet
+         * is a reason to start unlogged, never a reason not to start.
+         */
+        BPTR log_out = IDOS->Open(BLUETOOTH_SERVICE_LOG, MODE_NEWFILE);
+        if (log_out == ZERO)
+            log_out = IDOS->Open("NIL:", MODE_NEWFILE);
+
+        BTFD_LOG("launching %s, output to %s\n",
+                 BLUETOOTH_SERVICE_COMMAND, BLUETOOTH_SERVICE_LOG);
 
         IDOS->SystemTags(BLUETOOTH_SERVICE_COMMAND,
                          SYS_Input,   nil_in,
-                         SYS_Output,  nil_out,
+                         SYS_Output,  log_out,
                          SYS_Error,   ZERO,
                          SYS_Asynch,  TRUE,
                          NP_Name,     "Bluetooth Service",

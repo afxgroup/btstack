@@ -35,6 +35,7 @@
 #include <string.h>
 
 #include <proto/exec.h>
+#include <proto/dos.h>
 
 /* AmigaOS 4 SDK defines UNUSED as __attribute__((unused)) */
 #undef UNUSED
@@ -136,6 +137,18 @@ static bool verbose;
 static bool injecting_input;
 
 /*
+ * Is there a console to print to at all?
+ *
+ * Started from a Shell there is, and printing there is what the user wants.
+ * Started by bt.usbfd there is not: the process is launched with its handles
+ * on NIL:, so every line printed goes nowhere and the service becomes
+ * impossible to diagnose - which is exactly the state it was in when it failed
+ * to reconnect anything at boot and had no way of saying why. Serial is then
+ * the only place a message can be seen, so that is where they all go.
+ */
+static bool have_console;
+
+/*
  * Progress messages go to the console until a device is in use, and to the
  * serial debug output from then on.
  *
@@ -157,7 +170,7 @@ static void service_log(const char * format, ...){
     va_start(args, format);
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
-    if (injecting_input){
+    if (injecting_input || !have_console){
         DebugPrintF("%s", buffer);
     } else {
         printf("%s", buffer);
@@ -1149,11 +1162,13 @@ int btstack_main(int argc, const char * argv[]){
     }
     bt_handler_hid_set_verbose(verbose);
 
+    have_console = (IsInteractive(Output()) == DOSTRUE);
+
     /* startup banner - the console is still safe here, nothing is injected yet */
-    printf("BluetoothService starting, port '%s'\n", BLUETOOTH_SERVICE_PORT_NAME);
+    service_log("BluetoothService starting, port '%s'\n", BLUETOOTH_SERVICE_PORT_NAME);
 
     if (amigaos4_input_open() == false){
-        printf("ERROR: cannot open input.device\n");
+        service_log("ERROR: cannot open input.device\n");
         return -1;
     }
     btstack_run_loop_set_data_source_handler(&input_data_source, &input_poll_ds);
@@ -1161,7 +1176,7 @@ int btstack_main(int argc, const char * argv[]){
     btstack_run_loop_add_data_source(&input_data_source);
 
     if (bt_service_port_open(&handle_command) == false){
-        printf("ERROR: cannot create the service port - is a service already running?\n");
+        service_log("ERROR: cannot create the service port - is a service already running?\n");
         return -1;
     }
 
@@ -1188,7 +1203,7 @@ int btstack_main(int argc, const char * argv[]){
      */
     if (secure_connections_only == false){
         sm_set_secure_connections_only_mode(false);
-        printf("Accepting LE Legacy Pairing (start with --secure-only to require Secure Connections)\n");
+        service_log("Accepting LE Legacy Pairing (start with --secure-only to require Secure Connections)\n");
     }
 
     gatt_client_init();
