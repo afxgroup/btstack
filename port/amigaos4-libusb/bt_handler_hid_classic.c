@@ -109,12 +109,34 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
                         hid_subevent_descriptor_available_get_status(packet));
             break;
 
-        case HID_SUBEVENT_REPORT:
+        case HID_SUBEVENT_REPORT: {
+            const uint8_t * report     = hid_subevent_report_get_report(packet);
+            uint16_t        report_len = hid_subevent_report_get_report_len(packet);
+
+            /*
+             * Drop the HID transaction header before decoding.
+             *
+             * What arrives here is the whole L2CAP payload from the interrupt
+             * channel, which over Classic begins with a one byte transaction
+             * header - 0xa1, DATA/Input - and only then the report itself. The
+             * report parser expects the report, so leaving that byte on shifts
+             * every field by one and the keyboard decodes as gibberish.
+             *
+             * There is no such byte over LE, where reports arrive as GATT
+             * notifications, which is why this belongs here and not in the
+             * shared decoder. Anything that is not an input report is not ours
+             * to interpret.
+             */
+            if (report_len < 1) break;
+            if (report[0] != 0xa1) break;
+            report++;
+            report_len--;
+
             bt_hid_report_process(hid_descriptor_storage_get_descriptor_data(hid_cid),
                                   hid_descriptor_storage_get_descriptor_len(hid_cid),
-                                  hid_subevent_report_get_report(packet),
-                                  hid_subevent_report_get_report_len(packet));
+                                  report, report_len);
             break;
+        }
 
         case HID_SUBEVENT_CONNECTION_CLOSED: {
             DebugPrintF("hid classic: disconnected\n");
