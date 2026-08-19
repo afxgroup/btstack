@@ -129,5 +129,5 @@ Se_t
 MSG_HINT_LOCAL_NAME (//128)
 The name other devices see, and can connect to
 ;
-MSG_BUTTON_SCANNING (//32)
-Searching...
+MSG_BUTTON_STOP_SCAN (//32)
+S_top scan

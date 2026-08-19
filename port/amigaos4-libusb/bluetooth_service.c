@@ -1483,13 +1483,17 @@ static bt_result_t handle_command(BTServiceMsg * msg){
             return BT_RESULT_OK;
 
         case BTCMD_SCAN_STOP:
+            /*
+             * Ends the discovery, not the LE scan underneath it.
+             *
+             * That scan is how a known device is noticed coming back into
+             * range, so stopping it would quietly break reconnection for as
+             * long as nobody pressed the button again. What a client asks to
+             * stop is the inquiry it asked to start.
+             */
             inquiry_requested = false;
             inquiry_stop();
-            if (scanning){
-                gap_stop_scan();
-                scanning = false;
-                bt_service_port_notify(BTEVENT_SCAN_STOPPED, NULL, 0);
-            }
+            bt_service_port_notify(BTEVENT_SCAN_STOPPED, NULL, 0);
             return BT_RESULT_OK;
 
         case BTCMD_LIST_DEVICES: {
@@ -1652,6 +1656,21 @@ int btstack_main(int argc, const char * argv[]){
      * It also means HID_SUBEVENT_INCOMING_CONNECTION could never arrive, and
      * the code handling it had never once run.
      */
+    /*
+     * Say what this actually is.
+     *
+     * BTstack defaults the class of device to 0x007a020c, a smartphone, with
+     * the service bits for telephony, networking and object transfer that go
+     * with one - none of which is offered here. Another machine showing a list
+     * of what is nearby groups and filters by exactly this, so an Amiga
+     * claiming to be a phone that answers none of a phone's services is either
+     * confusing or invisible.
+     *
+     * 0x000104 is major class Computer, minor class Desktop workstation, with
+     * no service bits claimed. Being a HID host needs none of them.
+     */
+    gap_set_class_of_device(0x000104);
+
     gap_connectable_control(1);
     gap_discoverable_control(1);
 

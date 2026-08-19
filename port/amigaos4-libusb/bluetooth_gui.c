@@ -386,6 +386,7 @@ static Object * gad_forget;
 static Object * gad_service;
 static Object * gad_name;
 static bool     scan_running;
+static bool     scan_shown;   /* what the button currently says */
 
 /* the listbrowser must not be looking at a list while it is being rebuilt */
 static int32 selected_row(Object * gadget);
@@ -536,18 +537,22 @@ static void buttons_update(void){
     BOOL known_off  = (!service_running || (selected_row(gad_known)  < 0)) ? TRUE : FALSE;
 
     /*
-     * Scan says what it is doing.
+     * Scan is a switch, and is only written to when it changes.
      *
-     * The service scans by itself all the time, so a button that was always
-     * available and appeared to do nothing was worse than none: what it starts
-     * is a Classic inquiry, which runs for half a minute and then stops. While
-     * that is happening the button says so and cannot be pressed again.
+     * Setting GA_Text redraws the button, and this runs on every batch of
+     * events - which during a scan means constantly - so writing it
+     * unconditionally made it flicker. Nothing here is written unless the state
+     * it shows has actually moved.
      */
-    SetGadgetAttrs((struct Gadget *) gad_scan,       window, NULL,
-                   GA_Disabled, (!service_running || scan_running) ? TRUE : FALSE,
-                   GA_Text,     scan_running ? GetString(MSG_BUTTON_SCANNING)
+    if (scan_running != scan_shown){
+        scan_shown = scan_running;
+        SetGadgetAttrs((struct Gadget *) gad_scan, window, NULL,
+                       GA_Text, scan_running ? GetString(MSG_BUTTON_STOP_SCAN)
                                              : GetString(MSG_BUTTON_SCAN),
-                   TAG_DONE);
+                       TAG_DONE);
+    }
+    SetGadgetAttrs((struct Gadget *) gad_scan, window, NULL,
+                   GA_Disabled, service_running ? FALSE : TRUE, TAG_DONE);
     SetGadgetAttrs((struct Gadget *) gad_pair,       window, NULL, GA_Disabled, nearby_off, TAG_DONE);
     SetGadgetAttrs((struct Gadget *) gad_connect,    window, NULL, GA_Disabled, known_off,  TAG_DONE);
     SetGadgetAttrs((struct Gadget *) gad_disconnect, window, NULL, GA_Disabled, known_off,  TAG_DONE);
@@ -921,10 +926,11 @@ int main(void){
                                 break;
 
                             case GID_SCAN:
-                                /* asking to scan also makes the service look for
+                                /* asking to scan makes the service look for
                                  * Classic devices again, which it stops doing on
                                  * its own once everything it knows is connected */
-                                bt_command(BTCMD_SCAN_START, NULL, 0, NULL, 0, NULL);
+                                bt_command(scan_running ? BTCMD_SCAN_STOP : BTCMD_SCAN_START,
+                                           NULL, 0, NULL, 0, NULL);
                                 break;
 
                             case GID_PAIR: {

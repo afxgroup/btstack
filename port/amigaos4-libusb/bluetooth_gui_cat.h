@@ -57,7 +57,7 @@
 #define MSG_LOCAL_NAME           1039
 #define MSG_BUTTON_SET_NAME      1040
 #define MSG_HINT_LOCAL_NAME      1041
-#define MSG_BUTTON_SCANNING      1042
+#define MSG_BUTTON_STOP_SCAN     1042
 
 #define MSG_WINDOW_TITLE_STR         "Bluetooth Devices"
 #define MSG_NEARBY_STR               "Nearby"
@@ -101,7 +101,7 @@
 #define MSG_LOCAL_NAME_STR           "This computer is known as"
 #define MSG_BUTTON_SET_NAME_STR      "Se_t"
 #define MSG_HINT_LOCAL_NAME_STR      "The name other devices see, and can connect to"
-#define MSG_BUTTON_SCANNING_STR      "Searching..."
+#define MSG_BUTTON_STOP_SCAN_STR     "S_top scan"
 
 struct CatCompArrayType {
     LONG   cca_ID;
@@ -151,7 +151,7 @@ static const struct CatCompArrayType CatCompArray[] = {
     { MSG_LOCAL_NAME,          (STRPTR) MSG_LOCAL_NAME_STR },
     { MSG_BUTTON_SET_NAME,     (STRPTR) MSG_BUTTON_SET_NAME_STR },
     { MSG_HINT_LOCAL_NAME,     (STRPTR) MSG_HINT_LOCAL_NAME_STR },
-    { MSG_BUTTON_SCANNING,     (STRPTR) MSG_BUTTON_SCANNING_STR },
+    { MSG_BUTTON_STOP_SCAN,    (STRPTR) MSG_BUTTON_STOP_SCAN_STR },
 };
 
 #define CATCOMP_ARRAY_SIZE (sizeof(CatCompArray) / sizeof(CatCompArray[0]))
