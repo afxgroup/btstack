@@ -150,6 +150,51 @@ is what a driver feeding the input stream uses - the boot mouse, boot keyboard
 and HID drivers all do, and their history files say `IND_WRITEEVENT` is the OS3
 way, needing an input handler.
 
+## Bluetooth Classic keyboards
+
+Four things are needed to keep one connected, and none of them is obvious.
+
+**Page scan has to be on.** BTstack builds the scan enable value as
+`(connectable << 1) | discoverable`, and `connectable` defaults to off, so
+asking only for `gap_discoverable_control(1)` leaves page scan disabled: we can
+find devices and dial them, and nothing can dial us. A bonded keyboard does not
+wait to be dialled - it sleeps, and on a keypress it pages its host. Without
+`gap_connectable_control(1)` those pages go nowhere and the keyboard can only be
+reached while it is in pairing mode and answering inquiry, which is why it used
+to work for exactly as long as its pairing light blinked.
+
+**Sniff mode has to be allowed.** The default link policy settings are zero,
+which disallows everything, so the controller refuses the sniff request a
+battery keyboard makes. Refused, it does not stay awake - it goes quiet, and the
+link dies of supervision timeout (reason 0x08) about twenty seconds later.
+
+**The radio has to be left alone.** Scanning with interval equal to window is a
+100% duty cycle, and an inquiry running five seconds out of every five hops the
+inquiry sequence while established links take what is left. A keyboard in sniff
+mode has sparse anchor points by design and gets none. Inquiry is for finding a
+device we do not have; a bonded one is reached by paging it or by it paging us,
+so inquiry stops once a Classic device is bonded and a client has to ask for it
+to run again.
+
+**A stale link key is worse than none.** A device held in pairing mode is
+waiting to create a new bond. Authenticating it with the key from an old one
+succeeds - "asked for its link key", authentication and encryption all report
+status 0 - but its own pairing never completes, and it drops the link when its
+pairing window closes. `bonded, link key stored` in the log is the line that
+says a real bond was made; if it is missing, no pairing happened. `--forget-all`
+drops the link keys and the device list so everything can be paired afresh.
+
+Reports arrive as the whole L2CAP payload, which over Classic begins with a
+one byte HID transaction header (0xa1, DATA/Input) before the report itself.
+It is stripped in the Classic handler, not in the shared decoder, because
+reports arriving over LE as GATT notifications have no such byte.
+
+Note that a modifier can be latched in the keyboard itself - if every report
+carries the same modifier bit, including the ones where no key is down, that is
+the keyboard's own state and pressing and releasing that modifier clears it. The
+descriptor is printed under `-v` and each report with it, so where a field
+actually sits can be checked rather than guessed.
+
 ## Pairing with devices without LE Secure Connections
 
 `sm_init()` enables LE Secure Connections *Only* mode whenever
