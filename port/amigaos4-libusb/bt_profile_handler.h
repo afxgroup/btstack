@@ -117,6 +117,10 @@ void bt_profile_handler_report_status(const struct bt_profile_handler * handler,
  */
 const bt_profile_handler_t ** bt_profile_handlers(void);
 
+/* the handler able to drive a Classic device of this kind, for devices
+ * restored from storage that were never probed */
+const bt_profile_handler_t * bt_profile_handler_classic_for_kind(bt_device_kind_t kind);
+
 /**
  * @brief First handler claiming a device from its advertisement, NULL if none.
  */

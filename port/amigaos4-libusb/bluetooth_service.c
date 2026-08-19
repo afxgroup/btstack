@@ -570,6 +570,11 @@ static uint8_t devices_load(void){
         device->autoconnect = true;
         device->info.state  = BT_DEVICE_STATE_BONDED;
         device->info.kind   = (bt_device_kind_t) stored[i].kind;
+        /* a stored device was never probed, so give it back the handler its
+         * kind implies - without one it can never be reconnected */
+        if (stored[i].addr_type == 0xff){
+            device->handler = bt_profile_handler_classic_for_kind(device->info.kind);
+        }
         btstack_strcpy(device->info.name, sizeof(device->info.name), stored[i].name);
         service_log("service: known device %s '%s'\n",
                     bd_addr_to_str(device->info.bd_addr), device->info.name);
@@ -1039,7 +1044,9 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             device->con_handle = HCI_CON_HANDLE_INVALID;
             device->info.handler[0] = 0;
             device_set_state(device, BT_DEVICE_STATE_BONDED);
-            service_log("service: %s disconnected\n", bd_addr_to_str(device->info.bd_addr));
+            service_log("service: %s disconnected, reason 0x%02x\n",
+                        bd_addr_to_str(device->info.bd_addr),
+                        hci_event_disconnection_complete_get_reason(packet));
 
             /* a device we are meant to use reconnects when we see it again -
              * advertising on LE, inquiry on Classic, both of which scan_start()
