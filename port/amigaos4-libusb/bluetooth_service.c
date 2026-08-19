@@ -118,6 +118,7 @@ static bool     shutdown_requested;
 /* device we are currently connecting to, NULL when idle */
 static bt_device_t * pending_device;
 static btstack_timer_source_t connection_timer;
+static btstack_timer_source_t retry_timer;
 /* device we already asked gap_connect_cancel() for, used as a watchdog: see
  * connection_timeout_handler() */
 static bt_device_t * connection_cancel_pending_for;
@@ -322,10 +323,26 @@ static void connection_extend_for_pairing(const bd_addr_t addr){
     btstack_run_loop_add_timer(&connection_timer);
 }
 
+/*
+ * Retry on a timer of its own.
+ *
+ * This used to re-arm connection_timer, the very timer device_connect() uses to
+ * watch over an attempt - so a failed Classic page armed it for 500 ms, and a
+ * mouse advertising inside that window had device_connect() add a timer that
+ * was still in the run loop's list. BTstack asserts on exactly that, and its
+ * source says why: the list is singly linked, adding a member of it again links
+ * it to itself. With asserts compiled out the list simply breaks, and from then
+ * on no timer in the whole service fires again - which is why one failed page
+ * at a keyboard that was switched off took the mouse down with it.
+ *
+ * Two timers, and both are removed before being armed, which is what BTstack
+ * asks callers to do.
+ */
 static void connection_retry_later(void){
-    btstack_run_loop_set_timer_handler(&connection_timer, &connection_retry_timeout);
-    btstack_run_loop_set_timer(&connection_timer, 500);
-    btstack_run_loop_add_timer(&connection_timer);
+    btstack_run_loop_remove_timer(&retry_timer);
+    btstack_run_loop_set_timer_handler(&retry_timer, &connection_retry_timeout);
+    btstack_run_loop_set_timer(&retry_timer, 500);
+    btstack_run_loop_add_timer(&retry_timer);
 }
 
 static void connection_timeout_handler(btstack_timer_source_t * ts){
@@ -408,6 +425,7 @@ static void connection_timeout_handler(btstack_timer_source_t * ts){
     }
 
     connection_cancel_pending_for = pending_device;
+    btstack_run_loop_remove_timer(&connection_timer);
     btstack_run_loop_set_timer_handler(&connection_timer, &connection_timeout_handler);
     btstack_run_loop_set_timer(&connection_timer, 2000);
     btstack_run_loop_add_timer(&connection_timer);
@@ -435,6 +453,7 @@ static bt_result_t device_connect(bt_device_t * device){
     pending_device = device;
     device_set_state(device, BT_DEVICE_STATE_CONNECTING);
 
+    btstack_run_loop_remove_timer(&connection_timer);
     btstack_run_loop_set_timer_handler(&connection_timer, &connection_timeout_handler);
     btstack_run_loop_set_timer(&connection_timer, (device->info.addr_type == 0xff)
                                                   ? CONNECTION_TIMEOUT_CLASSIC_MS
@@ -549,13 +568,21 @@ static void handler_status(const bt_profile_handler_t * handler, const bd_addr_t
     if (status != ERROR_CODE_SUCCESS){
         service_log("service: handler failed on %s, status 0x%02x\n",
                     bd_addr_to_str(device->info.bd_addr), status);
-        device->handler = NULL;
+        /*
+         * The handler is kept. It says what the device is - a keyboard is still
+         * a keyboard when it is switched off - and clearing it here meant one
+         * page timeout permanently unteaching us how to reach it: the paging
+         * that reconnects bonded Classic devices needs a handler, so after the
+         * first failure the device was skipped for ever.
+         */
         if (pending_device == device){
             pending_device = NULL;
             btstack_run_loop_remove_timer(&connection_timer);
             connection_retry_later();
         }
-        gap_disconnect(con_handle);
+        if (con_handle != HCI_CON_HANDLE_INVALID){
+            gap_disconnect(con_handle);
+        }
     }
 }
 
