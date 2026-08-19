@@ -119,6 +119,7 @@ static bool     shutdown_requested;
 static bt_device_t * pending_device;
 static btstack_timer_source_t connection_timer;
 static btstack_timer_source_t retry_timer;
+static btstack_timer_source_t page_timer;
 /* device we already asked gap_connect_cancel() for, used as a watchdog: see
  * connection_timeout_handler() */
 static bt_device_t * connection_cancel_pending_for;
@@ -141,6 +142,7 @@ static bool autoconnect_on_find;
 #define INQUIRY_DURATION 4   /* 4 * 1.28 s ~ 5 s per round */
 static bool inquiring;
 static bool inquiry_wanted;
+static bool inquiry_requested;   /* a client asked to look for new devices */
 
 static const btstack_tlv_t * tlv_impl;
 static void *                tlv_context;
@@ -683,11 +685,35 @@ static void scan_resume_if_idle(void){
  * Retried on a slow tick rather than every inquiry round, since each attempt at
  * a device that is off costs a page timeout during which nothing else happens.
  */
-#define CLASSIC_RECONNECT_EVERY 6   /* inquiry rounds, ~5 s each */
-static uint8_t classic_reconnect_countdown;
+#define CLASSIC_RECONNECT_MS 20000
+
+static void classic_reconnect_bonded(void);
+
+static void page_timer_handler(btstack_timer_source_t * ts){
+    UNUSED(ts);
+    classic_reconnect_bonded();
+}
+
+static bool classic_bonded_exists(void){
+    uint8_t i;
+    for (i = 0; i < MAX_DEVICES; i++){
+        if (!devices[i].in_use)             continue;
+        if (!devices[i].autoconnect)        continue;
+        if (devices[i].info.addr_type != 0xff) continue;
+        return true;
+    }
+    return false;
+}
 
 static void classic_reconnect_bonded(void){
-    if (shutdown_requested)        return;
+    if (shutdown_requested) return;
+
+    /* keep the tick going whatever happens this time round */
+    btstack_run_loop_remove_timer(&page_timer);
+    btstack_run_loop_set_timer_handler(&page_timer, &page_timer_handler);
+    btstack_run_loop_set_timer(&page_timer, CLASSIC_RECONNECT_MS);
+    btstack_run_loop_add_timer(&page_timer);
+
     if (pending_device != NULL)    return;
     if (controller_ready == false) return;
 
@@ -726,6 +752,22 @@ static bool discovery_needed(void){
 }
 
 static void inquiry_start(void){
+    /*
+     * Inquiry is for finding a device we do not have yet.
+     *
+     * It costs five seconds of the radio at a time and it repeats, so running
+     * it permanently starved everything else: an LE mouse advertising the whole
+     * while took minutes to be noticed, and a Classic link had no room to stay
+     * alive. None of that bought anything once the keyboard was already bonded,
+     * because a bonded Classic device is reached by paging it, or by it paging
+     * us - never by discovering it again.
+     *
+     * So it runs while there is no Classic device bonded, which is how a fresh
+     * install finds its first keyboard, and stops once there is one. A client
+     * that wants to look for something new asks, and then it runs regardless.
+     */
+    if (!inquiry_requested && classic_bonded_exists()) return;
+
     inquiry_wanted = true;
     if (inquiring) return;
     if (controller_ready == false) return;
@@ -805,6 +847,7 @@ static void service_start_working(void){
 
     devices_load();
     scan_start(true);
+    classic_reconnect_bonded();   /* and it re-arms itself from here on */
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1062,12 +1105,6 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             /* inquiry is bounded, so keep it going for as long as we are
              * looking - otherwise a Classic device switched on a minute later
              * would never be found */
-            if (classic_reconnect_countdown == 0){
-                classic_reconnect_countdown = CLASSIC_RECONNECT_EVERY;
-                classic_reconnect_bonded();
-            } else {
-                classic_reconnect_countdown--;
-            }
             if (inquiry_wanted && !shutdown_requested){
                 inquiry_start();
             }
@@ -1269,10 +1306,14 @@ static bt_result_t handle_command(BTServiceMsg * msg){
         case BTCMD_SCAN_START:
             if (controller_ready == false) return BT_RESULT_NO_CONTROLLER;
             if (pending_device != NULL)     return BT_RESULT_BUSY;
+            /* asked for explicitly, so look for Classic devices too even when
+             * one is already bonded - this is how a second one gets added */
+            inquiry_requested = true;
             scan_start(false);
             return BT_RESULT_OK;
 
         case BTCMD_SCAN_STOP:
+            inquiry_requested = false;
             inquiry_stop();
             if (scanning){
                 gap_stop_scan();
