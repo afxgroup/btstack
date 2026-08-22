@@ -596,7 +596,38 @@ static bt_result_t classic_connect_now(bt_device_t * device){
 /* hand the device to the handler that claimed it */
 static void device_attach_handler(bt_device_t * device){
 
-    if (device->handler == NULL) return;
+    /*
+     * A device connected by address has never been probed.
+     *
+     * The handler is normally decided from the advertisement, but Pair works on
+     * an address - the device may not be in the table at all, and a client is
+     * entitled to name one it remembers from a previous run. Such a device
+     * arrived here with no handler and was dropped by a bare return: it paired,
+     * became Paired, and then simply stopped, with nothing said anywhere.
+     *
+     * So try the handlers that can drive a connection. For LE that means asking
+     * one to look, which is what it does anyway - it discovers the device's
+     * services and reports back whether it found what it needs. Guessing here
+     * costs a round trip and answers the question properly, where refusing
+     * costs the whole point of the button.
+     */
+    if ((device->handler == NULL) && (device->info.addr_type != 0xff)){
+        const bt_profile_handler_t ** handlers = bt_profile_handlers();
+        uint8_t i;
+        for (i = 0; handlers[i] != NULL; i++){
+            if (handlers[i]->connect == NULL) continue;
+            device->handler   = handlers[i];
+            device->info.kind = handlers[i]->kind;
+            service_log("service: %s was never probed, letting '%s' look\n",
+                        bd_addr_to_str(device->info.bd_addr), handlers[i]->name);
+            break;
+        }
+    }
+
+    if (device->handler == NULL){
+        service_log("service: nothing here can drive %s\n", bd_addr_to_str(device->info.bd_addr));
+        return;
+    }
 
     uint8_t status = device->handler->connect(device->con_handle);
     if (status != ERROR_CODE_SUCCESS){
