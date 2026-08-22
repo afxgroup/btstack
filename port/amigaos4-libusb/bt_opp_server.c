@@ -241,8 +241,13 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                      * name, which is dealt with above.
                      */
                     opp_goep_cid = goep_subevent_incoming_connection_get_goep_cid(packet);
-                    DebugPrintF("opp: incoming connection, accepting\n");
-                    goep_server_accept_connection(opp_goep_cid);
+                    {
+                        /* the other half of the same omission: accepting can
+                         * fail too, and a sender told nothing simply waits */
+                        uint8_t accept_status = goep_server_accept_connection(opp_goep_cid);
+                        DebugPrintF("opp: incoming connection, accepting (status 0x%02x)\n",
+                                    accept_status);
+                    }
                     break;
 
                 case GOEP_SUBEVENT_CONNECTION_OPENED:

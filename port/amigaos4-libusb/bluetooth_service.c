@@ -153,6 +153,20 @@ static btstack_timer_source_t page_timer;
 #define CLASSIC_RECONNECT_MAX_MS 60000
 static uint32_t classic_reconnect_ms = CLASSIC_RECONNECT_MIN_MS;
 
+/*
+ * Do not dial anybody while somebody is dialling us.
+ *
+ * A page is an outgoing connection attempt that occupies the controller for its
+ * whole page timeout, and a device connecting to us needs several round trips
+ * to bring its channels up. Doing both at once cost the incoming one: a file
+ * transfer was accepted and then reset by the sender, with the page that ran
+ * over the top of it logged in between.
+ *
+ * The keyboard being paged is not urgent. Whoever is connecting right now is.
+ */
+#define INCOMING_QUIET_MS 15000
+static uint32_t incoming_quiet_until_ms;
+
 /* device we already asked gap_connect_cancel() for, used as a watchdog: see
  * connection_timeout_handler() */
 static bt_device_t * connection_cancel_pending_for;
@@ -930,6 +944,11 @@ static void classic_reconnect_bonded(void){
     if (pending_device != NULL)    return;
     if (controller_ready == false) return;
 
+    if (btstack_time_delta(incoming_quiet_until_ms, btstack_run_loop_get_time_ms()) > 0){
+        log_info("classic reconnect: something is connecting to us, not paging");
+        return;
+    }
+
     uint8_t i;
     for (i = 0; i < MAX_DEVICES; i++){
         bt_device_t * device = &devices[i];
@@ -1498,6 +1517,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
          * for display, so failing to get one costs nothing.
          */
         case HCI_EVENT_CONNECTION_REQUEST:
+            incoming_quiet_until_ms = btstack_run_loop_get_time_ms() + INCOMING_QUIET_MS;
             reverse_bd_addr(&packet[2], addr);
             device = device_for_addr(addr);
             if ((device == NULL) || (device->info.name[0] == 0)){
