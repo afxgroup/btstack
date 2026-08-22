@@ -530,13 +530,33 @@ static void service_state_changed(bool running){
  * Detached, with its handles on NIL:, so it outlives this window - it is a
  * service, and closing the thing that manages it is no reason for it to stop.
  */
+#define SERVICE_LOG_FILE "T:BluetoothService.log"
+
 static void service_start(void){
     BPTR nil_in  = Open("NIL:", MODE_OLDFILE);
-    BPTR nil_out = Open("NIL:", MODE_NEWFILE);
+
+    /*
+     * Keep what the service prints on the way up.
+     *
+     * This was NIL:, and most of what it says at startup is plain printf from
+     * BTstack and from the port's own startup - which USB device was picked,
+     * the firmware paths, the controller's HCI revision and LMP subversion, and
+     * the warning when it is a controller BTstack has never heard of. Forty-odd
+     * lines, every one of them thrown away, and they are exactly the lines
+     * wanted when a dongle behaves oddly. Nothing is diagnosable about a
+     * startup nobody can read.
+     */
+    BPTR log_out = Open(SERVICE_LOG_FILE, MODE_NEWFILE);
+    if (log_out == ZERO){
+        log_out = Open("RAM:BluetoothService.log", MODE_NEWFILE);
+    }
+    if (log_out == ZERO){
+        log_out = Open("NIL:", MODE_NEWFILE);
+    }
 
     SystemTags("C:BluetoothService",
                SYS_Input,  nil_in,
-               SYS_Output, nil_out,
+               SYS_Output, log_out,
                SYS_Error,  ZERO,
                SYS_Asynch, TRUE,
                NP_Name,    "BluetoothService",
