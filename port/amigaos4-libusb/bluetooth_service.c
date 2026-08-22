@@ -156,7 +156,6 @@ static bt_device_t * connection_cancel_pending_for;
 /* true while scanning on our own initiative: a device a handler claims is then
  * connected right away. A scan asked for by a client does not do that - the
  * user is choosing, and connecting behind their back would be rude. */
-static bool autoconnect_on_find;
 
 /*
  * Classic inquiry runs alongside the LE scan, because the two find completely
@@ -358,6 +357,8 @@ static void          scan_start(bool autoconnect);
 static void          scan_resume_if_idle(void);
 static void          devices_store(void);
 static void          devices_forget_superseded(const bt_device_t * keep);
+static bt_result_t   classic_connect_now(bt_device_t * device);
+static bool          classic_connect_deferred;
 static void          connection_timeout_handler(btstack_timer_source_t * ts);
 static void          inquiry_start(void);
 static void          inquiry_stop(void);
@@ -540,6 +541,43 @@ static bt_result_t device_connect(bt_device_t * device){
             btstack_run_loop_remove_timer(&connection_timer);
             return BT_RESULT_UNSUPPORTED;
         }
+
+        /*
+         * Not while the controller is running an inquiry.
+         *
+         * Whether a controller accepts Create Connection in the middle of one
+         * is up to the controller. An older Realtek dongle allowed it; a
+         * Bluetooth 6.0 one refuses with COMMAND_DISALLOWED, and since a
+         * Classic device is dialled the moment an inquiry finds it, every
+         * attempt failed with status 0x0C - the same device over and over,
+         * stuck in Connecting, and no pairing possible at all.
+         *
+         * BTstack has a flag for serialising these,
+         * ENABLE_HCI_SERIALIZED_CONTROLLER_OPERATIONS, but it does not compile
+         * in this version: it switches on a connection state,
+         * SENT_CANCEL_CONNECTION, that the enum does not have. So the inquiry
+         * is stopped here and the connection goes out when it reports itself
+         * finished, which is the same ordering by our own hand.
+         */
+        if (inquiring){
+            classic_connect_deferred = true;
+            service_log("service: waiting for the inquiry to finish before dialling %s\n",
+                        bd_addr_to_str(device->info.bd_addr));
+            gap_inquiry_stop();
+            return BT_RESULT_OK;
+        }
+
+        return classic_connect_now(device);
+    }
+
+    gap_connect(device->info.bd_addr, (bd_addr_type_t) device->info.addr_type);
+    return BT_RESULT_OK;
+}
+
+/* the Classic half of device_connect(), once the controller is free to do it */
+static bt_result_t classic_connect_now(bt_device_t * device){
+
+    {
         uint8_t status = device->handler->connect_addr(device->info.bd_addr);
         if (status != ERROR_CODE_SUCCESS){
             service_log("service: classic connect to %s refused, status 0x%02x\n",
@@ -552,9 +590,6 @@ static bt_result_t device_connect(bt_device_t * device){
         }
         return BT_RESULT_OK;
     }
-
-    gap_connect(device->info.bd_addr, (bd_addr_type_t) device->info.addr_type);
-    return BT_RESULT_OK;
 }
 
 /* hand the device to the handler that claimed it */
@@ -904,9 +939,13 @@ static void inquiry_stop(void){
     /* inquiring is cleared by GAP_EVENT_INQUIRY_COMPLETE, which still arrives */
 }
 
+/*
+ * autoconnect no longer decides anything, it only says so in the log: known
+ * devices are reconnected whenever they are seen, and unknown ones are never
+ * connected to without being asked for.
+ */
 static void scan_start(bool autoconnect){
     if (scanning) return;
-    autoconnect_on_find = autoconnect;
     /*
      * Active scanning (1), not passive.
      *
@@ -1147,11 +1186,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                 break;
             }
 
-            /* connect what we can actually drive, when scanning by ourselves */
-            if (autoconnect_on_find && (handler != NULL) && (pending_device == NULL)){
-                service_log("service: connecting to %s\n", bd_addr_to_str(addr));
-                device_connect(device);
-            }
+            /* an unknown device is connected to when asked for, see BTCMD_PAIR */
             break;
         }
 
@@ -1237,10 +1272,18 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                 bt_service_port_notify(BTEVENT_DEVICE_FOUND, &device->info, 0);
             }
 
-            /* known Classic device seen again, or a new one we can drive */
+            /*
+             * A known Classic device seen again. Only a known one.
+             *
+             * This used to dial anything it could drive, which meant every
+             * keyboard within radio range and, worse, that forgetting a device
+             * lasted until the next inquiry found it and adopted it back. A
+             * device that is not known is connected to when the user asks, with
+             * Pair, and not before.
+             */
             if ((pending_device == NULL) && !shutdown_requested && (handler != NULL) &&
                 (device->con_handle == HCI_CON_HANDLE_INVALID) &&
-                (device->autoconnect || autoconnect_on_find)){
+                device->autoconnect){
                 service_log("service: connecting to %s (classic)\n", bd_addr_to_str(addr));
                 device_connect(device);
             }
@@ -1249,6 +1292,16 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 
         case GAP_EVENT_INQUIRY_COMPLETE:
             inquiring = false;
+
+            /* the controller is free now, so the connection that was waiting
+             * for it can go out - and no new inquiry until it has */
+            if (classic_connect_deferred){
+                classic_connect_deferred = false;
+                if (pending_device != NULL){
+                    classic_connect_now(pending_device);
+                }
+                break;
+            }
             /* inquiry is bounded, so keep it going for as long as we are
              * looking - otherwise a Classic device switched on a minute later
              * would never be found */
@@ -1556,18 +1609,42 @@ static bt_result_t handle_command(BTServiceMsg * msg){
             gap_disconnect(device->con_handle);
             return BT_RESULT_OK;
 
-        case BTCMD_UNPAIR:
+        case BTCMD_UNPAIR: {
             device = device_for_addr(msg->bsm_Addr);
             if (device == NULL) return BT_RESULT_UNKNOWN_DEVICE;
+
             device->autoconnect = false;
             if (device->con_handle != HCI_CON_HANDLE_INVALID){
                 gap_disconnect(device->con_handle);
             }
-            gap_delete_bonding((bd_addr_type_t) device->info.addr_type, device->info.bd_addr);
-            device->info.state = BT_DEVICE_STATE_FOUND;
+
+            /*
+             * Classic keys are not in the LE database and gap_delete_bonding()
+             * cannot reach them: it takes an address type, and 0xff - which is
+             * how a Classic address is marked here - is not one. So a forgotten
+             * keyboard kept its link key and carried on authenticating with it.
+             */
+            if (device->info.addr_type == 0xff){
+                gap_drop_link_key_for_bd_addr(device->info.bd_addr);
+            } else {
+                gap_delete_bonding((bd_addr_type_t) device->info.addr_type, device->info.bd_addr);
+            }
+
+            /*
+             * The entry goes entirely, rather than being left behind as a
+             * sighting. Left in the table it was picked up again within
+             * seconds, connected to, and stored afresh - so Forget appeared to
+             * work and then undid itself, which is exactly what was reported.
+             */
+            BTDeviceInfo forgotten = device->info;
+            forgotten.state = BT_DEVICE_STATE_UNKNOWN;
+            service_log("service: forgot %s\n", bd_addr_to_str(device->info.bd_addr));
+            memset(device, 0, sizeof(bt_device_t));
+
             devices_store();
-            bt_service_port_notify(BTEVENT_DEVICE_UPDATED, &device->info, 0);
+            bt_service_port_notify(BTEVENT_DEVICE_REMOVED, &forgotten, 0);
             return BT_RESULT_OK;
+        }
 
         case BTCMD_SUBSCRIBE_EVENTS:
             if (!bt_service_port_subscribe(msg->bsm_EventPort)) return BT_RESULT_BUSY;
