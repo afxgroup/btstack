@@ -33,6 +33,33 @@ static struct MsgPort         * notify_port;
 static APTR                     subscription;
 static void                  (* gone_callback)(void);
 static btstack_data_source_t    watch_data_source;
+static btstack_timer_source_t   confirm_timer;
+
+/*
+ * Wait before concluding that the last controller has gone.
+ *
+ * Two reasons, and either alone would be enough. Enumerating the USB bus in the
+ * instant a device is being removed is the least reliable moment to do it, and
+ * a wrong answer here does not cost a warning - it powers Bluetooth off and
+ * stops the service. And the enumeration walks configuration descriptors, which
+ * is real traffic on a bus that at that moment is also carrying an established
+ * connection.
+ *
+ * So the question is asked once, quietly, a few seconds after the dust settles.
+ */
+#define CONFIRM_DELAY_MS 3000
+
+static void confirm_gone(btstack_timer_source_t * ts){
+    UNUSED(ts);
+
+    if (hci_transport_usb_controller_present()){
+        log_info("usb watch: a Bluetooth controller is still here");
+        return;
+    }
+
+    log_info("usb watch: the last Bluetooth controller is gone");
+    if (gone_callback != NULL) gone_callback();
+}
 
 static void bt_usb_watch_process(btstack_data_source_t * ds, btstack_data_source_callback_type_t type){
     UNUSED(ds);
@@ -84,15 +111,14 @@ static void bt_usb_watch_process(btstack_data_source_t * ds, btstack_data_source
     if (!removal_seen) return;
 
     /*
-     * Asked once per batch rather than per message, and only after every
-     * message has been replied: unplugging a hub removes a great many
-     * functions at once, and the answer to "is there still a controller" is the
-     * same for all of them.
+     * Asked once, a moment later, rather than once per message: unplugging a
+     * hub removes a great many functions at once, and the answer is the same
+     * for all of them.
      */
-    if (hci_transport_usb_controller_present()) return;
-
-    log_info("usb watch: the last Bluetooth controller is gone");
-    if (gone_callback != NULL) gone_callback();
+    btstack_run_loop_remove_timer(&confirm_timer);
+    btstack_run_loop_set_timer_handler(&confirm_timer, &confirm_gone);
+    btstack_run_loop_set_timer(&confirm_timer, CONFIRM_DELAY_MS);
+    btstack_run_loop_add_timer(&confirm_timer);
 }
 
 bool bt_usb_watch_open(void (*last_controller_gone)(void)){
@@ -141,6 +167,7 @@ void bt_usb_watch_close(void){
     if (subscription != NULL){
         USBResRemNotify(subscription);
         subscription = NULL;
+        btstack_run_loop_remove_timer(&confirm_timer);
         btstack_run_loop_remove_data_source(&watch_data_source);
     }
 
