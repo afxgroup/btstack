@@ -131,3 +131,6 @@ The name other devices see, and can connect to
 ;
 MSG_BUTTON_STOP_SCAN (//32)
 S_top scan
+;
+MSG_PAIRING_PASSKEY (//128)
+Pairing with %s - passkey %06lu

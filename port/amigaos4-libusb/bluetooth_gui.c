@@ -146,6 +146,12 @@ static void status_show(LONG message_id){
     SetWindowTitles(window, (CONST_STRPTR) GetString(message_id), (CONST_STRPTR) -1);
 }
 
+/* the same, for something that has to be filled in before it can be shown */
+static void status_text(CONST_STRPTR text){
+    if (window == NULL) return;
+    SetWindowTitles(window, text, (CONST_STRPTR) -1);
+}
+
 /*
  * Send a prepared message and wait for the answer.
  *
@@ -624,14 +630,14 @@ int main(void){
 
     if ((IntuitionBase == NULL) || (WindowBase == NULL) || (LayoutBase == NULL) ||
         (ListBrowserBase == NULL) || (ButtonBase == NULL) || (StringBase == NULL)){
-        printf("%s\n", GetString(MSG_NO_CLASSES));
+        DebugPrintF("BluetoothGUI: %s\n", GetString(MSG_NO_CLASSES));
         return RETURN_FAIL;
     }
 
     reply_port = AllocSysObjectTags(ASOT_PORT, TAG_END);
     event_port = AllocSysObjectTags(ASOT_PORT, TAG_END);
     if ((reply_port == NULL) || (event_port == NULL)){
-        printf("Cannot create the message ports.\n");
+        DebugPrintF("BluetoothGUI: cannot create the message ports\n");
         return RETURN_FAIL;
     }
 
@@ -782,21 +788,21 @@ int main(void){
     End;
 
     if (win_obj == NULL){
-        printf("Cannot create the window.\n");
+        DebugPrintF("BluetoothGUI: %s\n", GetString(MSG_NO_WINDOW));
         return RETURN_FAIL;
     }
 
     window = (struct Window *) IDoMethod(win_obj, WM_OPEN, NULL);
     if (window == NULL){
-        printf("%s\n", GetString(MSG_NO_WINDOW));
+        DebugPrintF("BluetoothGUI: %s\n", GetString(MSG_NO_WINDOW));
         DisposeObject(win_obj);
         return RETURN_FAIL;
     }
 
     /* live updates for what the service knows; the timer is only for whether it
      * is there at all, which it cannot very well tell us itself */
-    printf("BluetoothGUI (protocol %u, built %s %s)\n",
-           (unsigned) BLUETOOTH_SERVICE_VERSION, __DATE__, __TIME__);
+    DebugPrintF("BluetoothGUI (protocol %u, built %s %s)\n",
+                (unsigned) BLUETOOTH_SERVICE_VERSION, __DATE__, __TIME__);
 
     service_state_changed(service_present());
     buttons_update();
@@ -854,12 +860,25 @@ int main(void){
                         refresh_known = true;
                         break;
 
-                    case BTEVENT_PAIRING_REQUEST:
-                        /* accepted by the service for now; showing the number
-                         * lets the user check it against the device */
-                        printf("Pairing with %s, passkey %06lu\n",
-                               event->bse_Device.name, (unsigned long) event->bse_Passkey);
+                    case BTEVENT_PAIRING_REQUEST: {
+                        /*
+                         * On screen, not on a console.
+                         *
+                         * The service accepts the pairing itself for now, so
+                         * this is the user's chance to check the number against
+                         * what the device shows - which means it has to be
+                         * somewhere they are looking. A window printing to the
+                         * Shell it happened to be started from is neither
+                         * reliable nor somewhere anyone watches.
+                         */
+                        char line[128];
+                        snprintf(line, sizeof(line), (const char *) GetString(MSG_PAIRING_PASSKEY),
+                                 name_or_unknown(event->bse_Device.name),
+                                 (unsigned long) event->bse_Passkey);
+                        status_text((CONST_STRPTR) line);
+                        DebugPrintF("BluetoothGUI: %s\n", line);
                         break;
+                    }
                     default:
                         refresh_known = true;
                         break;
