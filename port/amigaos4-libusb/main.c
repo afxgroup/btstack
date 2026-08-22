@@ -310,9 +310,13 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
                     if (!found){
                         printf("*** WARNING: BTstack does not know the Realtek controller %04x:%04x\n",
                                vendor_id, product_id);
-                        printf("*** No firmware will be loaded. Bluetooth Classic will work and\n");
-                        printf("*** Bluetooth LE will find nothing at all - no LE mouse, no LE anything.\n");
-                        printf("*** The HCI Revision and LMP Subversion printed below identify the chip.\n");
+                        printf("*** No firmware will be loaded, and nothing else will say so:\n");
+                        printf("*** the chipset driver gives up before it prints which files it wanted.\n");
+                        printf("*** The controller still runs on its ROM firmware, so this is not\n");
+                        printf("*** necessarily fatal - but anything the patch fixes stays unfixed.\n");
+                        printf("*** The HCI Revision and LMP Subversion below identify the chip:\n");
+                        printf("*** look them up in chipset/realtek/btstack_chipset_realtek.c and add\n");
+                        printf("*** this product id to fw_patch_table_usb.\n");
                     }
                 }
 
