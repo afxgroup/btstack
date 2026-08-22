@@ -276,6 +276,46 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
                     btstack_chipset_realtek_set_firmware_folder_path(folder);
                     btstack_chipset_realtek_set_config_folder_path(folder);
                 }
+                /*
+                 * Say so when BTstack has never heard of this controller.
+                 *
+                 * The Realtek chipset driver looks the firmware up by USB
+                 * product id, and a product id it does not recognise makes it
+                 * give up - with a log_info nobody sees, and without even
+                 * printing which firmware it would have used, because that line
+                 * comes after the return. The controller then starts perfectly
+                 * well and runs with no firmware at all.
+                 *
+                 * That failure is almost impossible to recognise for what it
+                 * is: Classic works, so inquiry finds devices and a keyboard
+                 * pairs and types, while LE reports nothing whatsoever and a
+                 * mouse is simply never seen. It looks like a Bluetooth Low
+                 * Energy problem, and it is a missing file.
+                 *
+                 * New dongles appear faster than the table is updated, so this
+                 * is worth checking rather than assuming.
+                 */
+                {
+                    uint16_t known = btstack_chipset_realtek_get_num_usb_controllers();
+                    bool     found = false;
+                    uint16_t i;
+                    for (i = 0; i < known; i++){
+                        uint16_t v = 0, p = 0;
+                        btstack_chipset_realtek_get_vendor_product_id(i, &v, &p);
+                        if ((v == vendor_id) && (p == product_id)){
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found){
+                        printf("*** WARNING: BTstack does not know the Realtek controller %04x:%04x\n",
+                               vendor_id, product_id);
+                        printf("*** No firmware will be loaded. Bluetooth Classic will work and\n");
+                        printf("*** Bluetooth LE will find nothing at all - no LE mouse, no LE anything.\n");
+                        printf("*** The HCI Revision and LMP Subversion printed below identify the chip.\n");
+                    }
+                }
+
                 btstack_chipset_realtek_set_product_id(product_id);
                 hci_set_chipset(btstack_chipset_realtek_instance());
                 hci_enable_custom_pre_init();
