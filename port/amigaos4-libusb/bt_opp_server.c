@@ -25,6 +25,7 @@
 #include "bluetooth.h"
 #include "bluetooth_sdp.h"
 #include "l2cap.h"
+#include "gap.h"
 #include "classic/sdp_util.h"
 #include "classic/sdp_server.h"
 
@@ -320,6 +321,32 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                     obex_srm_server_init(&opp_srm);
                     DebugPrintF("opp: connection opened, OBEX packets up to %u bytes\n",
                                 goep_server_response_get_max_message_size(opp_goep_cid));
+
+                    /*
+                     * Wake the link up for the duration of the transfer.
+                     *
+                     * Sniff mode is allowed on every link because a battery
+                     * keyboard needs it - refused it, the keyboard goes quiet
+                     * and its link dies. But a link in sniff only exchanges
+                     * data at its anchor points, so every packet waits for the
+                     * next one, and a file transfer becomes one packet per
+                     * sniff interval however much else is fixed above it.
+                     *
+                     * The measurement said exactly that: full sized packets,
+                     * 1016 bytes, arriving about fourteen times a second. Not a
+                     * bandwidth problem - a waiting problem, and one we
+                     * introduced ourselves for a different device's sake.
+                     *
+                     * Asked for per connection, so the keyboard keeps what it
+                     * needs and the transfer gets what it needs.
+                     */
+                    {
+                        hci_con_handle_t con_handle =
+                            goep_subevent_connection_opened_get_con_handle(packet);
+                        uint8_t sniff_status = gap_sniff_mode_exit(con_handle);
+                        DebugPrintF("opp: leaving sniff for the transfer, status 0x%02x\n",
+                                    sniff_status);
+                    }
                     break;
 
                 case GOEP_SUBEVENT_CONNECTION_CLOSED:
