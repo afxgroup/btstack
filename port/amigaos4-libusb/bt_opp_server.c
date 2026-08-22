@@ -26,6 +26,9 @@
 #include "bluetooth_sdp.h"
 #include "l2cap.h"
 #include "gap.h"
+#include "hci.h"
+#include "hci_cmd.h"
+#include "bluetooth.h"
 #include "classic/sdp_util.h"
 #include "classic/sdp_server.h"
 
@@ -76,6 +79,7 @@ static uint32_t      opp_received;
 static uint8_t       opp_response;      /* what to answer once we may send */
 static uint32_t      opp_packets;       /* how many OBEX packets carried it */
 static uint32_t      opp_started_ms;
+static hci_con_handle_t opp_con_handle = HCI_CON_HANDLE_INVALID;
 static bool          opp_response_is_connect;
 
 /* -------------------------------------------------------------------------- */
@@ -323,36 +327,43 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                                 goep_server_response_get_max_message_size(opp_goep_cid));
 
                     /*
-                     * Wake the link up for the duration of the transfer.
+                     * Keep this link out of sniff mode for the whole transfer.
                      *
-                     * Sniff mode is allowed on every link because a battery
-                     * keyboard needs it - refused it, the keyboard goes quiet
-                     * and its link dies. But a link in sniff only exchanges
-                     * data at its anchor points, so every packet waits for the
-                     * next one, and a file transfer becomes one packet per
-                     * sniff interval however much else is fixed above it.
+                     * Sniff is allowed on every link because a battery keyboard
+                     * needs it - refused, the keyboard goes quiet and its link
+                     * dies. But a link in sniff exchanges data only at its
+                     * anchor points, so a transfer runs at one packet per sniff
+                     * interval.
                      *
-                     * The measurement said exactly that: full sized packets,
-                     * 1016 bytes, arriving about fourteen times a second. Not a
-                     * bandwidth problem - a waiting problem, and one we
-                     * introduced ourselves for a different device's sake.
+                     * Leaving sniff once was not enough, and the shape of the
+                     * failure said so: the transfer starts at fifty kilobytes a
+                     * second and settles at fifteen. A fixed delay does not
+                     * behave like that. Something re-enters sniff once the link
+                     * looks idle for a moment, and from then on every packet
+                     * waits again.
                      *
-                     * Asked for per connection, so the keyboard keeps what it
-                     * needs and the transfer gets what it needs.
+                     * So the policy for this one connection is rewritten with
+                     * sniff removed, which is what stops the controller
+                     * agreeing to it, and only then is sniff left. The default
+                     * policy is untouched, so the keyboard keeps what it needs.
                      */
-                    {
-                        hci_con_handle_t con_handle =
-                            goep_subevent_connection_opened_get_con_handle(packet);
-                        uint8_t sniff_status = gap_sniff_mode_exit(con_handle);
-                        DebugPrintF("opp: leaving sniff for the transfer, status 0x%02x\n",
-                                    sniff_status);
-                    }
+                    opp_con_handle = goep_subevent_connection_opened_get_con_handle(packet);
+                    hci_send_cmd(&hci_write_link_policy_settings, opp_con_handle,
+                                 LM_LINK_POLICY_ENABLE_ROLE_SWITCH);
+                    DebugPrintF("opp: sniff disallowed on handle 0x%04x, leaving it (status 0x%02x)\n",
+                                opp_con_handle, gap_sniff_mode_exit(opp_con_handle));
                     break;
 
                 case GOEP_SUBEVENT_CONNECTION_CLOSED:
                     /* a transfer cut off half way leaves a partial file, which
                      * is worse than no file: it looks like it worked */
                     opp_file_close(false);
+                    /* hand the link back its power saving, if it still exists */
+                    if (opp_con_handle != HCI_CON_HANDLE_INVALID){
+                        hci_send_cmd(&hci_write_link_policy_settings, opp_con_handle,
+                                     LM_LINK_POLICY_ENABLE_ROLE_SWITCH | LM_LINK_POLICY_ENABLE_SNIFF_MODE);
+                        opp_con_handle = HCI_CON_HANDLE_INVALID;
+                    }
                     opp_goep_cid = 0;
                     break;
 

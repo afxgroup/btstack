@@ -1523,6 +1523,22 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
          * whether encryption ever happened is the difference between that and
          * a keyboard that simply considers some other host to be its active one.
          */
+        /*
+         * A link going into or out of sniff mode.
+         *
+         * Sniff is what lets a battery keyboard survive and what throttles a
+         * file transfer to one packet per interval, so which links are in it,
+         * and when they enter it, is worth being able to see rather than infer
+         * from a throughput graph.
+         */
+        case HCI_EVENT_MODE_CHANGE:
+            service_log("service: handle 0x%04x mode %u interval %u (status 0x%02x)\n",
+                        hci_event_mode_change_get_handle(packet),
+                        hci_event_mode_change_get_mode(packet),
+                        hci_event_mode_change_get_interval(packet),
+                        hci_event_mode_change_get_status(packet));
+            break;
+
         case HCI_EVENT_ENCRYPTION_CHANGE:
             service_log("service: encryption %s on handle 0x%04x, status 0x%02x\n",
                         hci_event_encryption_change_get_encryption_enabled(packet) ? "on" : "off",
