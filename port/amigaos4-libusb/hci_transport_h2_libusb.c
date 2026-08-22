@@ -84,7 +84,20 @@ static int                    usb_transport_open;
 /* Async transfer objects and their data buffers */
 static struct MsgPort         * usb_port;
 static libusb_async_transfer  * event_transfer;
-static libusb_async_transfer  * acl_transfer;
+/*
+ * Several ACL IN transfers, not one.
+ *
+ * With a single one the controller has nowhere to put the next packet from the
+ * moment one completes until we have processed it and submitted the buffer
+ * again - so every packet costs a full round trip through the run loop, and the
+ * throughput becomes one packet per round trip whatever the radio can do. That
+ * is the thirteen kilobytes a second a file transfer ran at.
+ *
+ * With a handful in flight there is always a buffer waiting, and the round
+ * trips overlap with the reception of the next packet instead of blocking it.
+ */
+#define ACL_IN_BUFFERS 4
+static libusb_async_transfer  * acl_transfer[ACL_IN_BUFFERS];
 /* ACL OUT is submitted asynchronously as well: the synchronous
  * libusb_bulk_transfer() blocks the whole run loop, and on this libusb-1.library
  * every other call only returns after its full timeout */
@@ -97,8 +110,7 @@ static bool                     acl_out_async;   /* false: fall back to sync bul
 static uint8_t                  event_buf[HCI_EVENT_BUFFER_SIZE + USB_MAX_PACKET_SIZE];
 /* ACL data is delivered to the stack with HCI_INCOMING_PRE_BUFFER_SIZE bytes in
  * front of the HCI ACL header (used by BNEP to avoid a memcpy) */
-static uint8_t                  acl_buf[HCI_INCOMING_PRE_BUFFER_SIZE + HCI_ACL_BUFFER_SIZE + USB_MAX_PACKET_SIZE];
-static uint8_t                * acl_data = &acl_buf[HCI_INCOMING_PRE_BUFFER_SIZE];
+static uint8_t                  acl_buf[ACL_IN_BUFFERS][HCI_INCOMING_PRE_BUFFER_SIZE + HCI_ACL_BUFFER_SIZE + USB_MAX_PACKET_SIZE];
 
 /* diagnostics - reported while the controller has not sent anything yet */
 static uint32_t                 usb_poll_ticks;
@@ -295,7 +307,7 @@ static int usb_find_endpoints(const struct libusb_config_descriptor * config){
      * wMaxPacketSize, so round the read length down. The buffers are large
      * enough that the result still holds a complete HCI event / ACL packet. */
     event_in_read_len = usb_read_len(sizeof(event_buf), event_in_packet_size);
-    acl_in_read_len   = usb_read_len(sizeof(acl_buf) - HCI_INCOMING_PRE_BUFFER_SIZE, acl_in_packet_size);
+    acl_in_read_len   = usb_read_len(sizeof(acl_buf[0]) - HCI_INCOMING_PRE_BUFFER_SIZE, acl_in_packet_size);
 
     printf("usb_open: endpoints event=0x%02x (max %u, read %u) acl_in=0x%02x (max %u, read %u) acl_out=0x%02x\n",
            event_in_addr, event_in_packet_size, event_in_read_len,
@@ -375,14 +387,19 @@ static void usb_poll_once(void){
         usb_submit_transfer(event_transfer, event_in_addr, event_buf, event_in_read_len, "event");
     }
 
-    /* --- ACL data (bulk IN) --- */
-    if (ILibusb1->libusb_async_check(acl_transfer) == 1){
+    /* --- ACL data (bulk IN), every buffer that has something in it --- */
+    uint8_t i;
+    for (i = 0; i < ACL_IN_BUFFERS; i++){
+        if (acl_transfer[i] == NULL) continue;
+        if (ILibusb1->libusb_async_check(acl_transfer[i]) != 1) continue;
+
+        uint8_t * data = &acl_buf[i][HCI_INCOMING_PRE_BUFFER_SIZE];
         int32 transferred = 0;
-        int r = ILibusb1->libusb_async_wait(acl_transfer, &transferred);
+        int r = ILibusb1->libusb_async_wait(acl_transfer[i], &transferred);
         if (r == LIBUSB_SUCCESS && transferred > 0){
             log_debug("usb_poll: ACL %ld bytes", (long)transferred);
             usb_first_packet_received = true;
-            packet_handler(HCI_ACL_DATA_PACKET, acl_data, (uint16_t)transferred);
+            packet_handler(HCI_ACL_DATA_PACKET, data, (uint16_t)transferred);
         } else if (r == LIBUSB_SUCCESS){
             usb_acl_empty_count++;
         } else {
@@ -390,7 +407,7 @@ static void usb_poll_once(void){
             log_error("acl async_wait: %d", r);
         }
         if (!usb_transport_open) return;
-        usb_submit_transfer(acl_transfer, acl_in_addr, acl_data, acl_in_read_len, "acl");
+        usb_submit_transfer(acl_transfer[i], acl_in_addr, data, acl_in_read_len, "acl");
     }
 }
 
@@ -504,14 +521,29 @@ static int usb_open(void){
 
     /* Allocate one async transfer per IN endpoint, plus one for ACL OUT */
     event_transfer   = ILibusb1->libusb_async_alloc(usb_handle, usb_port);
-    acl_transfer     = ILibusb1->libusb_async_alloc(usb_handle, usb_port);
+    bool acl_alloc_ok = true;
+    {
+        uint8_t i;
+        for (i = 0; i < ACL_IN_BUFFERS; i++){
+            acl_transfer[i] = ILibusb1->libusb_async_alloc(usb_handle, usb_port);
+            if (acl_transfer[i] == NULL) acl_alloc_ok = false;
+        }
+    }
     acl_out_transfer = ILibusb1->libusb_async_alloc(usb_handle, usb_port);
     acl_out_async    = (acl_out_transfer != NULL);
     acl_out_pending  = false;
-    if (!event_transfer || !acl_transfer){
+    if (!event_transfer || !acl_alloc_ok){
         printf("usb_open: libusb_async_alloc failed\n");
         if (event_transfer)  { ILibusb1->libusb_async_free(event_transfer);   event_transfer   = NULL; }
-        if (acl_transfer)    { ILibusb1->libusb_async_free(acl_transfer);     acl_transfer     = NULL; }
+        {
+            uint8_t i;
+            for (i = 0; i < ACL_IN_BUFFERS; i++){
+                if (acl_transfer[i] != NULL){
+                    ILibusb1->libusb_async_free(acl_transfer[i]);
+                    acl_transfer[i] = NULL;
+                }
+            }
+        }
         if (acl_out_transfer){ ILibusb1->libusb_async_free(acl_out_transfer); acl_out_transfer = NULL; }
         FreeSysObject(ASOT_PORT, usb_port); usb_port = NULL;
         libusb_release_interface(usb_handle, 0); libusb_close(usb_handle); libusb_exit(usb_ctx); usb_ctx = NULL;
@@ -520,7 +552,14 @@ static int usb_open(void){
 
     /* Submit the first reads — they stay in flight until explicitly aborted */
     usb_submit_transfer(event_transfer, event_in_addr, event_buf, event_in_read_len, "event");
-    usb_submit_transfer(acl_transfer,   acl_in_addr,   acl_data,  acl_in_read_len,   "acl");
+    {
+        uint8_t i;
+        for (i = 0; i < ACL_IN_BUFFERS; i++){
+            usb_submit_transfer(acl_transfer[i], acl_in_addr,
+                                &acl_buf[i][HCI_INCOMING_PRE_BUFFER_SIZE],
+                                acl_in_read_len, "acl");
+        }
+    }
 
     usb_transport_open = 1;
     usb_bus = libusb_get_bus_number(usb_handle->dev);
@@ -551,7 +590,15 @@ static int usb_close(void){
     btstack_run_loop_remove_timer(&usb_poll_timer);
     btstack_run_loop_remove_data_source(&usb_poll_data_source);
     if (event_transfer){ ILibusb1->libusb_async_abort(event_transfer); ILibusb1->libusb_async_free(event_transfer); event_transfer = NULL; }
-    if (acl_transfer)  { ILibusb1->libusb_async_abort(acl_transfer);   ILibusb1->libusb_async_free(acl_transfer);   acl_transfer   = NULL; }
+    {
+        uint8_t i;
+        for (i = 0; i < ACL_IN_BUFFERS; i++){
+            if (acl_transfer[i] == NULL) continue;
+            ILibusb1->libusb_async_abort(acl_transfer[i]);
+            ILibusb1->libusb_async_free(acl_transfer[i]);
+            acl_transfer[i] = NULL;
+        }
+    }
     if (acl_out_transfer){
         if (acl_out_pending) ILibusb1->libusb_async_abort(acl_out_transfer);
         ILibusb1->libusb_async_free(acl_out_transfer); acl_out_transfer = NULL;
