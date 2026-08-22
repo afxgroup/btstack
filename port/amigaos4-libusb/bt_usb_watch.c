@@ -40,20 +40,48 @@ static void bt_usb_watch_process(btstack_data_source_t * ds, btstack_data_source
 
     if (notify_port == NULL) return;
 
-    bool something_left = false;
+    bool     removal_seen = false;
+    uint32_t handled      = 0;
 
     struct Message * message;
     while ((message = GetMsg(notify_port)) != NULL){
-        struct USBNotifyMsg * notify = (struct USBNotifyMsg *) message;
-        uint16_t kind = notify->Type;
-        ReplyMsg(message);
+        struct USBNotifyMsg * notify   = (struct USBNotifyMsg *) message;
+        uint16_t              kind     = notify->Type;
+        struct MsgPort      * reply_to = message->mn_ReplyPort;
 
         if (kind == USBNM_TYPE_FUNCTIONREMOVED){
-            something_left = true;   /* worth asking, once, after the queue is drained */
+            removal_seen = true;   /* worth asking, once, after the queue is drained */
+        }
+
+        /*
+         * Reply only to somebody else.
+         *
+         * The header documents no reply contract for a USBNotifyMsg, so this
+         * was replying blind - and a message whose reply port is this very port
+         * goes straight back onto the queue we just took it from. GetMsg,
+         * ReplyMsg, GetMsg, for ever, at a hundred percent of the CPU with the
+         * run loop never reaching anything else. Which is exactly what a
+         * service that had stopped doing anything, while pinning a core, looks
+         * like.
+         */
+        if ((reply_to != NULL) && (reply_to != notify_port)){
+            ReplyMsg(message);
+        }
+
+        /*
+         * And a hard limit, so that whatever else the stack may do with these,
+         * one turn of the run loop always ends. A backlog is worth being told
+         * about; a loop that never returns is not something to find out about
+         * from a stopwatch.
+         */
+        handled++;
+        if (handled >= 64){
+            log_info("usb watch: 64 notifications in one go, leaving the rest for the next turn");
+            break;
         }
     }
 
-    if (!something_left) return;
+    if (!removal_seen) return;
 
     /*
      * Asked once per batch rather than per message, and only after every
