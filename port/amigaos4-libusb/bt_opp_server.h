@@ -30,6 +30,17 @@ void bt_opp_server_init(const char * service_name);
 void bt_opp_server_set_folder(const char * folder);
 const char * bt_opp_server_get_folder(void);
 
+/**
+ * @brief Is a transfer in progress?
+ *
+ * True from the moment a connection opens until it closes. The service asks so
+ * that it does not page a sleeping device while a file is arriving: a page
+ * costs the whole page timeout with the radio elsewhere, and doing it every few
+ * seconds through a transfer is what turned fifty kilobytes a second into
+ * fifteen, and then into a failure.
+ */
+bool bt_opp_server_is_busy(void);
+
 /** @brief Log each transfer to the serial debug output */
 void bt_opp_server_set_verbose(bool enabled);
 

@@ -93,6 +93,10 @@ const char * bt_opp_server_get_folder(void){
     return opp_folder;
 }
 
+bool bt_opp_server_is_busy(void){
+    return opp_goep_cid != 0;
+}
+
 void bt_opp_server_set_verbose(bool enabled){
     opp_verbose = enabled;
 }

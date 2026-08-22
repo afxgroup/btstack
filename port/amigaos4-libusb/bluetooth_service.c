@@ -962,6 +962,25 @@ static void classic_reconnect_bonded(void){
         return;
     }
 
+    /*
+     * Not during a file transfer, however long it takes.
+     *
+     * The quiet period above is counted from an incoming connection and lasts
+     * fifteen seconds, which covers a device connecting and nothing more. A
+     * transfer runs for minutes, and paging resumed in the middle of one: every
+     * few seconds the radio left the link to spend a five second page timeout
+     * on a keyboard that was not there. That is what fifty kilobytes a second
+     * decaying to fifteen was, and eventually it broke the transfer outright.
+     *
+     * A keyboard that is asleep will still be asleep afterwards, and it can
+     * reach us itself the moment a key is pressed. The transfer cannot wait and
+     * cannot retry.
+     */
+    if (bt_opp_server_is_busy()){
+        log_info("classic reconnect: a transfer is running, not paging");
+        return;
+    }
+
     uint8_t i;
     for (i = 0; i < MAX_DEVICES; i++){
         bt_device_t * device = &devices[i];
