@@ -314,7 +314,7 @@ static void nearby_remove(const BTDeviceInfo * device){
  * nearby list, so this keeps only what has actually been bonded - otherwise
  * "Known devices" would list things the user has never agreed to.
  */
-static void known_refresh(void){
+static void lists_refresh(void){
     BTDeviceInfo all[MAX_DEVICES];
     uint32       all_count = 0;
     uint32       i;
@@ -324,9 +324,28 @@ static void known_refresh(void){
         return;
     }
 
+    /*
+     * Both lists come from here, not only the known one.
+     *
+     * Nearby used to be built purely from sighting events, and the service
+     * announces a device it can drive exactly once - the first time it sees it.
+     * The service starts at boot and this window opens later, so that one
+     * announcement had always been and gone: a mouse the service knew perfectly
+     * well was simply absent from the list, and pressing Scan did not help
+     * because Scan restarts the Classic inquiry and the mouse is not new.
+     *
+     * Asking outright covers everything the service knows. The events still
+     * arrive and still matter - they are what makes the list live, and they are
+     * the only way an unsupported device is heard of at all, since those get no
+     * table entry to be listed from.
+     */
     for (i = 0; i < all_count; i++){
-        if (all[i].state < BT_DEVICE_STATE_BONDED) continue;
-        known[known_count++] = all[i];
+        if (all[i].state >= BT_DEVICE_STATE_BONDED){
+            known[known_count++] = all[i];
+            nearby_remove(&all[i]);      /* it is managed now, not merely seen */
+        } else {
+            nearby_update(&all[i]);
+        }
     }
 }
 
@@ -485,7 +504,7 @@ static void service_state_changed(bool running){
     if (running){
         subscribed = bt_command(BTCMD_SUBSCRIBE_EVENTS, NULL, 0, NULL, 0, NULL) == BT_RESULT_OK;
         name_refresh();
-        known_refresh();
+        lists_refresh();
     } else {
         subscribed   = false;
         nearby_count = 0;
@@ -883,12 +902,12 @@ int main(void){
                 FreeSysObject(ASOT_MESSAGE, event);
             }
 
-            if (refresh_nearby) nearby_show();
-            if (refresh_known){
-                known_refresh();
+            if (refresh_known) lists_refresh();
+            if (refresh_nearby || refresh_known){
+                nearby_show();
                 known_show();
+                buttons_update();
             }
-            if (refresh_nearby || refresh_known) buttons_update();
         }
 
         if (signals & window_sig){
@@ -984,7 +1003,8 @@ int main(void){
                                 if ((row >= 0) && ((uint32) row < known_count)){
                                     bt_command(BTCMD_UNPAIR, known[row].bd_addr,
                                                known[row].addr_type, NULL, 0, NULL);
-                                    known_refresh();
+                                    lists_refresh();
+                                    nearby_show();
                                     known_show();
                                 }
                                 buttons_update();

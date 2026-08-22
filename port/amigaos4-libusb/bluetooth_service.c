@@ -1177,8 +1177,22 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 
                 uint8_t name_len = ad_iterator_get_data_len(&context);
                 if (name_len >= sizeof(device->info.name)) name_len = sizeof(device->info.name) - 1;
-                memcpy(device->info.name, ad_iterator_get_data(&context), name_len);
-                device->info.name[name_len] = 0;
+                /*
+                 * Announce a name that has just been learned.
+                 *
+                 * A device is often seen before it says what it is called - the
+                 * name is in the scan response, which arrives separately - and
+                 * without this it stayed nameless in every list for as long as
+                 * it was in range, since a device is only announced when it is
+                 * new.
+                 */
+                if (memcmp(device->info.name, ad_iterator_get_data(&context), name_len) != 0){
+                    memcpy(device->info.name, ad_iterator_get_data(&context), name_len);
+                    device->info.name[name_len] = 0;
+                    if (!is_new){
+                        bt_service_port_notify(BTEVENT_DEVICE_UPDATED, &device->info, 0);
+                    }
+                }
                 break;
             }
 
