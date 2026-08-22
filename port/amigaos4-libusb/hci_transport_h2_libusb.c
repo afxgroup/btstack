@@ -93,6 +93,7 @@ static struct MsgPort         * usb_port;
  */
 #define EVENT_IN_BUFFERS 3
 static libusb_async_transfer  * event_transfer[EVENT_IN_BUFFERS];
+static uint8_t                  event_next;
 /*
  * Several ACL IN transfers, not one.
  *
@@ -107,6 +108,21 @@ static libusb_async_transfer  * event_transfer[EVENT_IN_BUFFERS];
  */
 #define ACL_IN_BUFFERS 4
 static libusb_async_transfer  * acl_transfer[ACL_IN_BUFFERS];
+
+/*
+ * Which buffer holds the next packet, in the order they were submitted.
+ *
+ * ACL packets have to reach L2CAP in the order the controller sent them - it
+ * reassembles fragments, and a packet delivered early is not a late packet, it
+ * is a corrupt reassembly and a channel that never recovers. Scanning the
+ * buffers by index does not preserve that: a buffer is resubmitted as soon as
+ * it is processed, so it goes to the back of the controller's queue while
+ * keeping its low index, and the next scan finds it first.
+ *
+ * So they are taken strictly in turn. If the one whose turn it is has not
+ * completed, nothing after it is ready either.
+ */
+static uint8_t                  acl_next;
 /* ACL OUT is submitted asynchronously as well: the synchronous
  * libusb_bulk_transfer() blocks the whole run loop, and on this libusb-1.library
  * every other call only returns after its full timeout */
@@ -378,16 +394,18 @@ static void usb_poll_once(void){
     /* --- HCI event (interrupt IN) --- */
     uint8_t e;
     for (e = 0; e < EVENT_IN_BUFFERS; e++){
-        if (event_transfer[e] == NULL) continue;
-        if (ILibusb1->libusb_async_check(event_transfer[e]) != 1) continue;
+        uint8_t slot = event_next;
+        if (event_transfer[slot] == NULL) break;
+        if (ILibusb1->libusb_async_check(event_transfer[slot]) != 1) break;
+        event_next = (uint8_t) ((event_next + 1) % EVENT_IN_BUFFERS);
 
         int32 transferred = 0;
-        int r = ILibusb1->libusb_async_wait(event_transfer[e], &transferred);
+        int r = ILibusb1->libusb_async_wait(event_transfer[slot], &transferred);
         if (r == LIBUSB_SUCCESS && transferred > 0){
-            log_debug("usb_poll: HCI event %ld bytes (0x%02x)", (long)transferred, event_buf[e][0]);
+            log_debug("usb_poll: HCI event %ld bytes (0x%02x)", (long)transferred, event_buf[slot][0]);
             /* only a real packet counts as 'controller is talking to us' */
             usb_first_packet_received = true;
-            packet_handler(HCI_EVENT_PACKET, event_buf[e], (uint16_t)transferred);
+            packet_handler(HCI_EVENT_PACKET, event_buf[slot], (uint16_t)transferred);
         } else if (r == LIBUSB_SUCCESS){
             /* completed without data - normal for a polled interrupt endpoint */
             usb_event_empty_count++;
@@ -397,18 +415,20 @@ static void usb_poll_once(void){
             log_error("event async_wait: %d", r);
         }
         if (!usb_transport_open) return;
-        usb_submit_transfer(event_transfer[e], event_in_addr, event_buf[e], event_in_read_len, "event");
+        usb_submit_transfer(event_transfer[slot], event_in_addr, event_buf[slot], event_in_read_len, "event");
     }
 
-    /* --- ACL data (bulk IN), every buffer that has something in it --- */
+    /* --- ACL data (bulk IN), in submission order --- */
     uint8_t i;
     for (i = 0; i < ACL_IN_BUFFERS; i++){
-        if (acl_transfer[i] == NULL) continue;
-        if (ILibusb1->libusb_async_check(acl_transfer[i]) != 1) continue;
+        uint8_t slot = acl_next;
+        if (acl_transfer[slot] == NULL) break;
+        if (ILibusb1->libusb_async_check(acl_transfer[slot]) != 1) break;
+        acl_next = (uint8_t) ((acl_next + 1) % ACL_IN_BUFFERS);
 
-        uint8_t * data = &acl_buf[i][HCI_INCOMING_PRE_BUFFER_SIZE];
+        uint8_t * data = &acl_buf[slot][HCI_INCOMING_PRE_BUFFER_SIZE];
         int32 transferred = 0;
-        int r = ILibusb1->libusb_async_wait(acl_transfer[i], &transferred);
+        int r = ILibusb1->libusb_async_wait(acl_transfer[slot], &transferred);
         if (r == LIBUSB_SUCCESS && transferred > 0){
             log_debug("usb_poll: ACL %ld bytes", (long)transferred);
             usb_first_packet_received = true;
@@ -420,7 +440,7 @@ static void usb_poll_once(void){
             log_error("acl async_wait: %d", r);
         }
         if (!usb_transport_open) return;
-        usb_submit_transfer(acl_transfer[i], acl_in_addr, data, acl_in_read_len, "acl");
+        usb_submit_transfer(acl_transfer[slot], acl_in_addr, data, acl_in_read_len, "acl");
     }
 }
 
@@ -594,6 +614,9 @@ static int usb_open(void){
                                 acl_in_read_len, "acl");
         }
     }
+
+    acl_next   = 0;
+    event_next = 0;
 
     usb_transport_open = 1;
     usb_bus = libusb_get_bus_number(usb_handle->dev);
