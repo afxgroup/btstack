@@ -49,6 +49,7 @@
 #include "bt_handler_hid.h"
 #include "bt_handler_hid_classic.h"
 #include "bt_usb_watch.h"
+#include "bt_opp_server.h"
 #include "bt_profile_handler.h"
 #include "bt_service_port.h"
 #include "btstack_run_loop_amigaos.h"
@@ -57,6 +58,7 @@
 
 /* the known devices are kept in the TLV, so a restart - or a reboot - finds the
  * mouse again without the user pairing it a second time */
+#define TLV_TAG_FOLDER  ((((uint32_t)'B')<<24)|(((uint32_t)'T')<<16)|(((uint32_t)'F')<<8)|((uint32_t)'D'))
 #define TLV_TAG_NAME    ((((uint32_t)'B')<<24)|(((uint32_t)'T')<<16)|(((uint32_t)'N')<<8)|((uint32_t)'M'))
 #define TLV_TAG_DEVICES ((((uint32_t)'B')<<24)|(((uint32_t)'T')<<16)|(((uint32_t)'D')<<8)|'V')
 
@@ -812,11 +814,26 @@ static void name_load(void){
     }
     gap_set_local_name(local_name);
     service_log("service: known to others as '%s'\n", local_name);
+
+    char folder[256];
+    len = tlv_impl->get_tag(tlv_context, TLV_TAG_FOLDER, (uint8_t *) folder, sizeof(folder));
+    if ((len > 0) && (folder[0] != 0)){
+        folder[sizeof(folder) - 1] = 0;
+        bt_opp_server_set_folder(folder);
+    }
+    service_log("service: files sent to us go to %s\n", bt_opp_server_get_folder());
 }
 
 static void name_store(void){
     if (tlv_impl == NULL) return;
     tlv_impl->store_tag(tlv_context, TLV_TAG_NAME, (const uint8_t *) local_name, sizeof(local_name));
+}
+
+static void folder_store(void){
+    if (tlv_impl == NULL) return;
+    char folder[256];
+    btstack_strcpy(folder, sizeof(folder), bt_opp_server_get_folder());
+    tlv_impl->store_tag(tlv_context, TLV_TAG_FOLDER, (const uint8_t *) folder, sizeof(folder));
 }
 
 static uint8_t devices_load(void){
@@ -1660,6 +1677,18 @@ static bt_result_t handle_command(BTServiceMsg * msg){
             return BT_RESULT_OK;
         }
 
+        case BTCMD_GET_FOLDER:
+            btstack_strcpy(msg->bsm_Folder, sizeof(msg->bsm_Folder), bt_opp_server_get_folder());
+            return BT_RESULT_OK;
+
+        case BTCMD_SET_FOLDER:
+            msg->bsm_Folder[sizeof(msg->bsm_Folder) - 1] = 0;
+            if (msg->bsm_Folder[0] == 0) return BT_RESULT_UNSUPPORTED;
+            bt_opp_server_set_folder(msg->bsm_Folder);
+            folder_store();
+            service_log("service: files sent to us now go to %s\n", bt_opp_server_get_folder());
+            return BT_RESULT_OK;
+
         case BTCMD_SCAN_START:
             if (controller_ready == false) return BT_RESULT_NO_CONTROLLER;
             if (pending_device != NULL)     return BT_RESULT_BUSY;
@@ -1927,6 +1956,13 @@ int btstack_main(int argc, const char * argv[]){
      * no service bits claimed. Being a HID host needs none of them.
      */
     gap_set_class_of_device(0x000104);
+
+    /*
+     * Accept files pushed to us. Registered here rather than on demand: the SDP
+     * record has to be in place before anything asks what we can do, and a
+     * sender asks once and gives up.
+     */
+    bt_opp_server_init(local_name);
 
     gap_connectable_control(1);
     gap_discoverable_control(1);

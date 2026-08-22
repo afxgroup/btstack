@@ -59,6 +59,8 @@
 #define MSG_HINT_LOCAL_NAME      1041
 #define MSG_BUTTON_STOP_SCAN     1042
 #define MSG_PAIRING_PASSKEY      1043
+#define MSG_RECEIVE_FOLDER       1044
+#define MSG_HINT_RECEIVE_FOLDER  1045
 
 #define MSG_WINDOW_TITLE_STR         "Bluetooth Devices"
 #define MSG_NEARBY_STR               "Nearby"
@@ -104,6 +106,8 @@
 #define MSG_HINT_LOCAL_NAME_STR      "The name other devices see, and can connect to"
 #define MSG_BUTTON_STOP_SCAN_STR     "S_top scan"
 #define MSG_PAIRING_PASSKEY_STR      "Pairing with %s - passkey %06lu"
+#define MSG_RECEIVE_FOLDER_STR       "Received files go to"
+#define MSG_HINT_RECEIVE_FOLDER_STR  "Where files sent to this computer are written"
 
 struct CatCompArrayType {
     LONG   cca_ID;
@@ -155,6 +159,8 @@ static const struct CatCompArrayType CatCompArray[] = {
     { MSG_HINT_LOCAL_NAME,     (STRPTR) MSG_HINT_LOCAL_NAME_STR },
     { MSG_BUTTON_STOP_SCAN,    (STRPTR) MSG_BUTTON_STOP_SCAN_STR },
     { MSG_PAIRING_PASSKEY,     (STRPTR) MSG_PAIRING_PASSKEY_STR },
+    { MSG_RECEIVE_FOLDER,      (STRPTR) MSG_RECEIVE_FOLDER_STR },
+    { MSG_HINT_RECEIVE_FOLDER, (STRPTR) MSG_HINT_RECEIVE_FOLDER_STR },
 };
 
 #define CATCOMP_ARRAY_SIZE (sizeof(CatCompArray) / sizeof(CatCompArray[0]))

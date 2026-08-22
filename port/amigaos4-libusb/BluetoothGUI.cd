@@ -134,3 +134,9 @@ S_top scan
 ;
 MSG_PAIRING_PASSKEY (//128)
 Pairing with %s - passkey %06lu
+;
+MSG_RECEIVE_FOLDER (//64)
+Received files go to
+;
+MSG_HINT_RECEIVE_FOLDER (//128)
+Where files sent to this computer are written

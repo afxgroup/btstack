@@ -213,6 +213,28 @@ static bt_result_t bt_command(bt_command_t command, const uint8 * addr, uint8 ad
     return result;
 }
 
+/* the receive folder, the same shape as the name */
+static bt_result_t bt_command_folder(bt_command_t command, char * folder, uint32 folder_size){
+
+    BTServiceMsg msg;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.bsm_Command = command;
+    if (command == BTCMD_SET_FOLDER){
+        memcpy(msg.bsm_Folder, folder, strnlen(folder, sizeof(msg.bsm_Folder) - 1));
+    }
+
+    bt_result_t result = bt_send(&msg);
+
+    if ((result == BT_RESULT_OK) && (command == BTCMD_GET_FOLDER)){
+        msg.bsm_Folder[sizeof(msg.bsm_Folder) - 1] = 0;
+        uint32 len = strnlen(msg.bsm_Folder, folder_size - 1);
+        memcpy(folder, msg.bsm_Folder, len);
+        folder[len] = 0;
+    }
+    return result;
+}
+
 /* the name travels in both directions, so it gets its own way in */
 static bt_result_t bt_command_name(bt_command_t command, char * name, uint32 name_size){
 
@@ -395,6 +417,8 @@ enum {
     GID_SERVICE,
     GID_NAME,
     GID_SET_NAME,
+    GID_FOLDER,
+    GID_SET_FOLDER,
 };
 
 static struct List nearby_labels;
@@ -410,6 +434,7 @@ static Object * gad_disconnect;
 static Object * gad_forget;
 static Object * gad_service;
 static Object * gad_name;
+static Object * gad_folder;
 static bool     scan_running;
 static bool     scan_shown;   /* what the button currently says */
 
@@ -489,6 +514,14 @@ static void known_show(void){
  * since the subscription died with it, and ask what it knows.
  */
 /* the name the service is using, so the field shows what is true now */
+static void folder_refresh(void){
+    char folder[256];
+    if (bt_command_folder(BTCMD_GET_FOLDER, folder, sizeof(folder)) != BT_RESULT_OK) return;
+    if ((window == NULL) || (gad_folder == NULL)) return;
+    SetGadgetAttrs((struct Gadget *) gad_folder, window, NULL,
+                   STRINGA_TextVal, folder, TAG_DONE);
+}
+
 static void name_refresh(void){
     char name[32];
     if (bt_command_name(BTCMD_GET_NAME, name, sizeof(name)) != BT_RESULT_OK) return;
@@ -504,6 +537,7 @@ static void service_state_changed(bool running){
     if (running){
         subscribed = bt_command(BTCMD_SUBSCRIBE_EVENTS, NULL, 0, NULL, 0, NULL) == BT_RESULT_OK;
         name_refresh();
+        folder_refresh();
         lists_refresh();
     } else {
         subscribed   = false;
@@ -767,6 +801,25 @@ int main(void){
             End,
             CHILD_WeightedHeight, 0,
 
+            LAYOUT_AddChild, HLayoutObject,
+                LAYOUT_Label,    GetString(MSG_RECEIVE_FOLDER),
+                LAYOUT_AddChild, gad_folder = StringObject,
+                    GA_ID,          GID_FOLDER,
+                    GA_RelVerify,   TRUE,
+                    GA_HintInfo,    GetString(MSG_HINT_RECEIVE_FOLDER),
+                    STRINGA_TextVal, "RAM:",
+                    STRINGA_MaxChars, 255,
+                End,
+                LAYOUT_AddChild, ButtonObject,
+                    GA_ID,        GID_SET_FOLDER,
+                    GA_RelVerify, TRUE,
+                    GA_Text,      GetString(MSG_BUTTON_SET_NAME),
+                    GA_HintInfo,  GetString(MSG_HINT_RECEIVE_FOLDER),
+                End,
+                CHILD_WeightedWidth, 0,
+            End,
+            CHILD_WeightedHeight, 0,
+
             LAYOUT_AddChild, VLayoutObject,
                 LAYOUT_BevelStyle, BVS_GROUP,
                 LAYOUT_Label,      GetString(MSG_NEARBY),
@@ -966,6 +1019,16 @@ int main(void){
                                 GetAttr(STRINGA_TextVal, gad_name, (uint32 *) &typed);
                                 if ((typed != NULL) && (typed[0] != 0)){
                                     bt_command_name(BTCMD_SET_NAME, (char *) typed, 32);
+                                }
+                                break;
+                            }
+
+                            case GID_SET_FOLDER:
+                            case GID_FOLDER: {
+                                STRPTR typed = NULL;
+                                GetAttr(STRINGA_TextVal, gad_folder, (uint32 *) &typed);
+                                if ((typed != NULL) && (typed[0] != 0)){
+                                    bt_command_folder(BTCMD_SET_FOLDER, (char *) typed, 256);
                                 }
                                 break;
                             }

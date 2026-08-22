@@ -26,7 +26,7 @@
 #include <exec/ports.h>
 
 #define BLUETOOTH_SERVICE_PORT_NAME "bluetooth.service"
-#define BLUETOOTH_SERVICE_VERSION   3
+#define BLUETOOTH_SERVICE_VERSION   4
 
 /* how the service was asked to behave with a device */
 typedef enum {
@@ -75,6 +75,10 @@ typedef enum {
     BTCMD_GET_NAME,
     BTCMD_SET_NAME,
 
+    /* where files pushed to us are written */
+    BTCMD_GET_FOLDER,
+    BTCMD_SET_FOLDER,
+
     /* device */
     BTCMD_PAIR,
     BTCMD_UNPAIR,
@@ -121,6 +125,9 @@ typedef struct {
 
     /* GET_NAME fills this in, SET_NAME reads it */
     char             bsm_Name[32];
+
+    /* GET_FOLDER fills this in, SET_FOLDER reads it */
+    char             bsm_Folder[256];
 
     /* SUBSCRIBE_EVENTS: where to send BTServiceEvent messages */
     struct MsgPort * bsm_EventPort;
