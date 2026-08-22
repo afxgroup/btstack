@@ -27,7 +27,22 @@
 #include "classic/sdp_server.h"
 
 #define OPP_RFCOMM_CHANNEL     9
-#define OPP_L2CAP_PSM          0x1015
+/*
+ * RFCOMM only, deliberately.
+ *
+ * GOEP can also run over L2CAP, and a sender that sees a GoepL2CapPsm in the
+ * service record will prefer it. BTstack's server requires ERTM on that bearer
+ * - ertm_mandatory is set in its configuration - and when the negotiation does
+ * not conclude, the channel is accepted and then never opens: the sender waits,
+ * gives up, and reports the connection reset. Which is precisely what happened,
+ * with accept returning success and CONNECTION_OPENED never arriving.
+ *
+ * RFCOMM is GOEP v1.1, is what every sender supports, and needs none of that.
+ * Receiving a file does not need the throughput the L2CAP bearer exists for, so
+ * offering only the transport that works is the better trade. Advertising both
+ * and having one of them stall is the worst of the options.
+ */
+#define OPP_L2CAP_PSM          0
 #define OPP_MAX_FRAME_SIZE     0xFFFF
 #define OPP_NAME_MAX           64
 #define OPP_PATH_MAX           256
@@ -288,7 +303,7 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 /* -------------------------------------------------------------------------- */
 
 static void opp_create_sdp_record(uint8_t * service, uint32_t service_record_handle,
-                                  uint8_t rfcomm_channel, uint16_t l2cap_psm, const char * name){
+                                  uint8_t rfcomm_channel, const char * name){
     uint8_t * attribute;
     de_create_sequence(service);
 
@@ -333,10 +348,6 @@ static void opp_create_sdp_record(uint8_t * service, uint32_t service_record_han
     }
     de_pop_sequence(service, attribute);
 
-    /* GOEP L2CAP PSM, which is how a modern sender avoids RFCOMM entirely */
-    de_add_number(service, DE_UINT, DE_SIZE_16, BLUETOOTH_ATTRIBUTE_GOEP_L2CAP_PSM);
-    de_add_number(service, DE_UINT, DE_SIZE_16, l2cap_psm);
-
     de_add_number(service, DE_UINT, DE_SIZE_16, 0x0100);   /* ServiceName */
     de_add_data(service, DE_STRING, (uint16_t) strlen(name), (uint8_t *) name);
 
@@ -372,10 +383,10 @@ void bt_opp_server_init(const char * service_name){
 
     memset(opp_sdp_record, 0, sizeof(opp_sdp_record));
     opp_create_sdp_record(opp_sdp_record, sdp_create_service_record_handle(),
-                          OPP_RFCOMM_CHANNEL, OPP_L2CAP_PSM,
+                          OPP_RFCOMM_CHANNEL,
                           (service_name != NULL) ? service_name : "Object Push");
     sdp_register_service(opp_sdp_record);
 
-    DebugPrintF("opp: object push registered on RFCOMM %u / L2CAP 0x%04x, files go to %s\n",
-                OPP_RFCOMM_CHANNEL, OPP_L2CAP_PSM, opp_folder);
+    DebugPrintF("opp: object push registered on RFCOMM channel %u, files go to %s\n",
+                OPP_RFCOMM_CHANNEL, opp_folder);
 }
