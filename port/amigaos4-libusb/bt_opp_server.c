@@ -349,8 +349,21 @@ static void opp_create_sdp_record(uint8_t * service, uint32_t service_record_han
 void bt_opp_server_init(const char * service_name){
 
     goep_server_init();
-    goep_server_register_service(&opp_packet_handler, OPP_RFCOMM_CHANNEL, OPP_MAX_FRAME_SIZE,
-                                 OPP_L2CAP_PSM, l2cap_max_mtu(), LEVEL_0);
+
+    /*
+     * The result matters. A channel already taken, or a transport the stack
+     * cannot offer, fails here and quietly - and the SDP record still gets
+     * registered, so the service is advertised, browsed, chosen, and then
+     * nothing answers. From the other end that is a connection attempt that
+     * hangs, which is a far worse failure than being refused.
+     */
+    uint8_t status = goep_server_register_service(&opp_packet_handler,
+                                                  OPP_RFCOMM_CHANNEL, OPP_MAX_FRAME_SIZE,
+                                                  OPP_L2CAP_PSM, l2cap_max_mtu(), LEVEL_0);
+    if (status != ERROR_CODE_SUCCESS){
+        DebugPrintF("opp: cannot offer object push, status 0x%02x - not advertising it\n", status);
+        return;
+    }
 
     memset(opp_sdp_record, 0, sizeof(opp_sdp_record));
     opp_create_sdp_record(opp_sdp_record, sdp_create_service_record_handle(),
