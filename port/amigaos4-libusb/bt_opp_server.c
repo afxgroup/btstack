@@ -375,6 +375,13 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                     break;
 
                 case GOEP_SUBEVENT_CONNECTION_CLOSED:
+                    /*
+                     * Worth saying, because an accepted connection that closes
+                     * without ever opening looks identical from here to one
+                     * that was never accepted - and the difference is where to
+                     * go looking.
+                     */
+                    DebugPrintF("opp: connection closed\n");
                     /* a transfer cut off half way leaves a partial file, which
                      * is worse than no file: it looks like it worked */
                     opp_file_close(false);
