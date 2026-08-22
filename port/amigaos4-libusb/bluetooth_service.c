@@ -149,7 +149,20 @@ static btstack_timer_source_t page_timer;
  * 2.56 s between scans - and paging for less than twice that risks missing a
  * device that is awake and listening, which is the one case that must not fail.
  */
-#define CLASSIC_RECONNECT_MIN_MS  4000
+/*
+ * Four seconds was too eager, and self defeating.
+ *
+ * While the controller is paging it is not page scanning, and a page costs its
+ * whole timeout - five seconds - when the device is asleep. Retrying every four
+ * meant paging almost continuously, so the keyboard trying to reach us found us
+ * deaf for most of the time it was trying. The thing we were chasing was the
+ * thing we were blocking.
+ *
+ * Twelve seconds leaves the radio listening for most of every cycle, and the
+ * keyboard's own reconnection - which is the path that actually works - gets
+ * the room it needs.
+ */
+#define CLASSIC_RECONNECT_MIN_MS 12000
 #define CLASSIC_RECONNECT_MAX_MS 60000
 static uint32_t classic_reconnect_ms = CLASSIC_RECONNECT_MIN_MS;
 
@@ -2032,6 +2045,23 @@ int btstack_main(int argc, const char * argv[]){
      */
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_DISPLAY_ONLY);
     gap_set_page_timeout(PAGE_TIMEOUT_SLOTS);
+
+    /*
+     * Be quick to answer, since answering is how a keyboard actually returns.
+     *
+     * A bonded Classic keyboard reconnects by paging us when a key is pressed;
+     * our own paging is the fallback for when it does not. Page scan defaults
+     * to listening 11.25 ms out of every 1.28 s, so a keyboard can spend a good
+     * while trying before one of its pages lands in a window we are listening
+     * in - which is what "it takes ages to come back however much I type" was.
+     *
+     * Interlaced scanning halves that by listening on two frequencies per
+     * window, and a 640 ms interval doubles how often the window comes round.
+     * The cost is a little more radio time given to listening, which is exactly
+     * what we want to spend it on.
+     */
+    gap_set_page_scan_activity(0x0400, 0x0012);   /* 640 ms interval, 11.25 ms window */
+    gap_set_page_scan_type(PAGE_SCAN_MODE_INTERLACED);
 
     /*
      * Let the controller agree to sniff mode.

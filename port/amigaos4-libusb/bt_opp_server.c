@@ -19,6 +19,7 @@
 #include "classic/goep_server.h"
 #include "classic/obex.h"
 #include "classic/obex_parser.h"
+#include "classic/obex_srm_server.h"
 #include "classic/sdp_util.h"
 #include "bluetooth.h"
 #include "bluetooth_sdp.h"
@@ -52,7 +53,20 @@ static uint16_t     opp_goep_cid;
 static bool         opp_verbose;
 static char         opp_folder[OPP_PATH_MAX] = "RAM:";
 
-static obex_parser_t opp_parser;
+static obex_parser_t      opp_parser;
+
+/*
+ * Single Response Mode, which is the difference between a transfer and a wait.
+ *
+ * Without it OBEX is strictly one request, one response: the sender puts a
+ * packet, waits for the answer, puts the next. Every packet costs a round trip,
+ * and at Bluetooth round trip times that is the thirteen kilobytes a second
+ * this managed - nine megabytes in ten minutes, almost all of it spent waiting.
+ *
+ * With it the sender streams and we answer once at the end. The headers are
+ * negotiated per request, which is what these calls do.
+ */
+static obex_srm_server_t opp_srm;
 static char          opp_name[OPP_NAME_MAX];
 static char          opp_path[OPP_PATH_MAX];
 static FILE        * opp_file;
@@ -147,6 +161,8 @@ static void opp_parser_callback(void * user_data, uint8_t header_id, uint16_t to
     UNUSED(user_data);
     UNUSED(total_len);
 
+    obex_srm_server_header_store(&opp_srm, header_id, total_len, data_offset, data_buffer, data_len);
+
     switch (header_id){
         case OBEX_HEADER_NAME:
             /* arrives in chunks, and the first chunk is where the file is opened
@@ -183,6 +199,8 @@ static void opp_handle_request(void){
     obex_parser_operation_info_t info;
     obex_parser_get_operation_info(&opp_parser, &info);
 
+    obex_srm_server_handle_headers(&opp_srm);
+
     opp_response_is_connect = false;
 
     switch (info.opcode){
@@ -193,7 +211,16 @@ static void opp_handle_request(void){
             break;
 
         case OBEX_OPCODE_PUT:
-            /* not the final packet: more is coming */
+            /*
+             * Not the final packet. With Single Response Mode running the
+             * sender does not wait to be told so and there is nothing to send;
+             * without it, every one of these costs a round trip.
+             */
+            if (obex_srm_server_is_srm_active(&opp_srm)){
+                obex_parser_init_for_request(&opp_parser, &opp_parser_callback, NULL);
+                obex_srm_server_reset_fields(&opp_srm);
+                return;
+            }
             opp_response = OBEX_RESP_CONTINUE;
             break;
 
@@ -236,6 +263,7 @@ static void opp_send_response(void){
     } else {
         goep_server_response_create_general(opp_goep_cid);
     }
+    obex_srm_server_add_srm_headers(&opp_srm, opp_goep_cid);
     goep_server_execute(opp_goep_cid, opp_response);
 }
 
@@ -269,6 +297,7 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                     opp_goep_cid = goep_subevent_connection_opened_get_goep_cid(packet);
                     opp_name[0]  = 0;
                     obex_parser_init_for_request(&opp_parser, &opp_parser_callback, NULL);
+                    obex_srm_server_init(&opp_srm);
                     DebugPrintF("opp: connection opened\n");
                     break;
 
@@ -282,6 +311,7 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 case GOEP_SUBEVENT_CAN_SEND_NOW:
                     opp_send_response();
                     obex_parser_init_for_request(&opp_parser, &opp_parser_callback, NULL);
+                    obex_srm_server_reset_fields(&opp_srm);
                     break;
 
                 default:
