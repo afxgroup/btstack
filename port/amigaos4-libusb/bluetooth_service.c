@@ -50,6 +50,8 @@
 #include "bt_handler_hid_classic.h"
 #include "bt_usb_watch.h"
 #include "bt_opp_server.h"
+#include "classic/sdp_server.h"
+#include "classic/rfcomm.h"
 #include "bt_profile_handler.h"
 #include "bt_service_port.h"
 #include "btstack_run_loop_amigaos.h"
@@ -1886,6 +1888,19 @@ int btstack_main(int argc, const char * argv[]){
     }
 
     l2cap_init();
+
+    /*
+     * The SDP server, and RFCOMM under it.
+     *
+     * Neither was needed while this was only a HID host: a host asks other
+     * devices what they can do and never has to answer the question itself. The
+     * moment we offer a service, both matter - sdp_register_service() without
+     * sdp_init() puts a record in a list nobody serves, so another machine
+     * browses our services, finds nothing at all, and reports that it cannot
+     * connect. Which is exactly what it did.
+     */
+    sdp_init();
+    rfcomm_init();
 
     sm_init();
     sm_set_io_capabilities(IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
