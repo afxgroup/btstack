@@ -1272,7 +1272,21 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
              * it exists - that is where this decision belongs.
              */
             hci_event_user_confirmation_request_get_bd_addr(packet, addr);
+            /*
+             * Make room for it if it is not known.
+             *
+             * A device that dialled us has never been in an inquiry result, so
+             * it has no entry - and passing NULL here meant the pairing request
+             * carried no address and no name, which is how a computer that
+             * identifies itself perfectly clearly came out as "(no name)". An
+             * entry also gives its name somewhere to go when the remote name
+             * request answers.
+             */
             device = device_for_addr(addr);
+            if (device == NULL) device = device_add(addr, 0xff);
+            if ((device != NULL) && (device->info.name[0] == 0)){
+                gap_remote_name_request(addr, 0, 0);
+            }
             bt_service_port_notify(BTEVENT_PAIRING_REQUEST, device ? &device->info : NULL,
                                    little_endian_read_32(packet, 8));
             service_log("service: pairing with %s, numeric value %"PRIu32"\n",
@@ -1285,6 +1299,10 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             /* the number the user has to type on the keyboard being paired */
             hci_event_user_passkey_notification_get_bd_addr(packet, addr);
             device = device_for_addr(addr);
+            if (device == NULL) device = device_add(addr, 0xff);
+            if ((device != NULL) && (device->info.name[0] == 0)){
+                gap_remote_name_request(addr, 0, 0);
+            }
             bt_service_port_notify(BTEVENT_PAIRING_REQUEST, device ? &device->info : NULL,
                                    hci_event_user_passkey_notification_get_numeric_value(packet));
             service_log("service: type %06"PRIu32" on %s and press Enter\n",
@@ -1448,6 +1466,40 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                         hci_event_authentication_complete_get_connection_handle(packet),
                         hci_event_authentication_complete_get_status(packet));
             break;
+
+        /*
+         * A Classic device that connects to us arrives with no name.
+         *
+         * A name comes from an inquiry result, and a device that dialled us was
+         * never in one - so a pairing request from a computer showed "(no name)"
+         * however clearly that computer identifies itself. The name has to be
+         * asked for, which is a request of its own.
+         *
+         * Asked once per device, when there is a name-shaped hole. It is only
+         * for display, so failing to get one costs nothing.
+         */
+        case HCI_EVENT_CONNECTION_REQUEST:
+            reverse_bd_addr(&packet[2], addr);
+            device = device_for_addr(addr);
+            if ((device == NULL) || (device->info.name[0] == 0)){
+                gap_remote_name_request(addr, 0, 0);
+            }
+            break;
+
+        case HCI_EVENT_REMOTE_NAME_REQUEST_COMPLETE: {
+            if (hci_event_remote_name_request_complete_get_status(packet) != ERROR_CODE_SUCCESS) break;
+            hci_event_remote_name_request_complete_get_bd_addr(packet, addr);
+            device = device_for_addr(addr);
+            if (device == NULL) break;
+
+            const char * name = hci_event_remote_name_request_complete_get_remote_name(packet);
+            if ((name == NULL) || (name[0] == 0)) break;
+
+            btstack_strcpy(device->info.name, sizeof(device->info.name), name);
+            service_log("service: %s is called '%s'\n", bd_addr_to_str(addr), device->info.name);
+            bt_service_port_notify(BTEVENT_DEVICE_UPDATED, &device->info, 0);
+            break;
+        }
 
         case HCI_EVENT_LINK_KEY_REQUEST:
             reverse_bd_addr(&packet[2], addr);
