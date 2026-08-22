@@ -1697,7 +1697,19 @@ int btstack_main(int argc, const char * argv[]){
     have_console = (IsInteractive(Output()) == DOSTRUE);
 
     /* startup banner - the console is still safe here, nothing is injected yet */
-    service_log("BluetoothService starting, port '%s'\n", BLUETOOTH_SERVICE_PORT_NAME);
+    /*
+     * Say which build this is, every time.
+     *
+     * Twice now a session has been spent on behaviour that had already been
+     * fixed, because the binary being run was not the one that was built - once
+     * a protocol version behind, once a file that could not be overwritten
+     * because the old process still held it. Neither was diagnosable from the
+     * log, which looked exactly like a bug that would not go away. A build
+     * stamp costs one line and settles it before anything else is looked at.
+     */
+    service_log("BluetoothService starting, port '%s' (protocol %u, built %s %s)\n",
+                BLUETOOTH_SERVICE_PORT_NAME, (unsigned) BLUETOOTH_SERVICE_VERSION,
+                __DATE__, __TIME__);
 
     if (amigaos4_input_open() == false){
         service_log("ERROR: cannot open input.device\n");
