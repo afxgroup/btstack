@@ -16,6 +16,7 @@
 #include "btstack_defines.h"
 #include "btstack_event.h"
 #include "btstack_util.h"
+#include "btstack_run_loop.h"
 #include "classic/goep_server.h"
 #include "classic/obex.h"
 #include "classic/obex_parser.h"
@@ -72,6 +73,8 @@ static char          opp_path[OPP_PATH_MAX];
 static FILE        * opp_file;
 static uint32_t      opp_received;
 static uint8_t       opp_response;      /* what to answer once we may send */
+static uint32_t      opp_packets;       /* how many OBEX packets carried it */
+static uint32_t      opp_started_ms;
 static bool          opp_response_is_connect;
 
 /* -------------------------------------------------------------------------- */
@@ -124,7 +127,21 @@ static void opp_file_close(bool keep){
     opp_file = NULL;
 
     if (keep){
-        DebugPrintF("opp: received '%s' (%lu bytes)\n", opp_path, (unsigned long) opp_received);
+        /*
+         * Measured, not guessed. Three separate things that should each have
+         * changed the transfer rate changed nothing at all, which means the
+         * limit is below all of them - and the only way to find out where is to
+         * say how much arrived, in how many packets, over how long.
+         */
+        uint32_t elapsed_ms = btstack_run_loop_get_time_ms() - opp_started_ms;
+        if (elapsed_ms == 0) elapsed_ms = 1;
+        DebugPrintF("opp: received '%s' - %lu bytes in %lu packets over %lu ms (%lu bytes/s, %lu bytes/packet)\n",
+                    opp_path,
+                    (unsigned long) opp_received,
+                    (unsigned long) opp_packets,
+                    (unsigned long) elapsed_ms,
+                    (unsigned long) ((opp_received * 1000) / elapsed_ms),
+                    (unsigned long) (opp_packets ? (opp_received / opp_packets) : 0));
     } else {
         remove(opp_path);
         DebugPrintF("opp: transfer of '%s' was abandoned\n", opp_path);
@@ -150,7 +167,9 @@ static bool opp_file_open(void){
         DebugPrintF("opp: cannot write '%s'\n", opp_path);
         return false;
     }
-    opp_received = 0;
+    opp_received   = 0;
+    opp_packets    = 0;
+    opp_started_ms = btstack_run_loop_get_time_ms();
     return true;
 }
 
@@ -200,6 +219,7 @@ static void opp_handle_request(void){
     obex_parser_get_operation_info(&opp_parser, &info);
 
     obex_srm_server_handle_headers(&opp_srm);
+    opp_packets++;
 
     opp_response_is_connect = false;
 
@@ -298,7 +318,8 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                     opp_name[0]  = 0;
                     obex_parser_init_for_request(&opp_parser, &opp_parser_callback, NULL);
                     obex_srm_server_init(&opp_srm);
-                    DebugPrintF("opp: connection opened\n");
+                    DebugPrintF("opp: connection opened, OBEX packets up to %u bytes\n",
+                                goep_server_response_get_max_message_size(opp_goep_cid));
                     break;
 
                 case GOEP_SUBEVENT_CONNECTION_CLOSED:
