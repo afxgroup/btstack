@@ -677,6 +677,18 @@ static void handler_status(const bt_profile_handler_t * handler, const bd_addr_t
          * that reconnects bonded Classic devices needs a handler, so after the
          * first failure the device was skipped for ever.
          */
+        /*
+         * Back to where it was before the attempt.
+         *
+         * device_connect() sets CONNECTING and nothing here ever undid it, so a
+         * device that failed to connect stayed Connecting for the rest of the
+         * session - which is what a keyboard asleep in a drawer looked like in
+         * the window, while the log showed page timeout after page timeout and
+         * the state that was being shown had stopped meaning anything.
+         */
+        device_set_state(device, device->autoconnect ? BT_DEVICE_STATE_BONDED
+                                                     : BT_DEVICE_STATE_FOUND);
+
         if (pending_device == device){
             pending_device = NULL;
             btstack_run_loop_remove_timer(&connection_timer);

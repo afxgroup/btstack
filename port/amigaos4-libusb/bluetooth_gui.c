@@ -801,9 +801,6 @@ int main(void){
 
     /* live updates for what the service knows; the timer is only for whether it
      * is there at all, which it cannot very well tell us itself */
-    DebugPrintF("BluetoothGUI (protocol %u, built %s %s)\n",
-                (unsigned) BLUETOOTH_SERVICE_VERSION, __DATE__, __TIME__);
-
     service_state_changed(service_present());
     buttons_update();
     timer_arm(SERVICE_CHECK_SECONDS);
