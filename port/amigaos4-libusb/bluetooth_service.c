@@ -170,6 +170,7 @@ static bt_device_t * connection_cancel_pending_for;
 #define INQUIRY_DURATION 4   /* 4 * 1.28 s ~ 5 s per round */
 static bool inquiring;
 static bool inquiry_wanted;
+static bool le_reception_confirmed;
 static bool inquiry_requested;   /* a client asked to look for new devices */
 
 /*
@@ -985,6 +986,7 @@ static void scan_start(bool autoconnect){
     gap_set_scan_parameters(1, 96, 24);
     gap_start_scan();
     scanning = true;
+    le_reception_confirmed = false;
     /*
      * Deliberately no BTEVENT_SCAN_STARTED here.
      *
@@ -1112,6 +1114,20 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             }
 
             if (!scanning) break;
+
+            /*
+             * Say once that LE reception works at all.
+             *
+             * Without it, a mouse missing from the list is indistinguishable
+             * from an LE radio that is receiving nothing - and the two need
+             * completely different things looking at. One line per scan answers
+             * it, where -v answers it by burying it in hundreds.
+             */
+            if (!le_reception_confirmed){
+                le_reception_confirmed = true;
+                service_log("service: LE reception working, first advertisement from %s\n",
+                            bd_addr_to_str(addr));
+            }
 
             /* every advertisement, so "we never see it" can be told apart from
              * "we see it and reject it" without guessing */
