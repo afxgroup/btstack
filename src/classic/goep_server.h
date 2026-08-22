@@ -47,6 +47,13 @@ extern "C" {
 #include <stdint.h>
 
 #ifdef ENABLE_GOEP_L2CAP
+/*
+ * ERTM working buffer, which l2cap_ertm_setup_buffers() divides up as: the
+ * reassembly buffer of one MTU, then num_rx_buffers and num_tx_buffers data
+ * buffers of one MPS each, plus the packet state arrays. With the config in
+ * goep_server.c - four buffers each way, an MTU of half this - 2000 does not
+ * cover it, and l2cap asserts on exactly that.
+ */
 #ifndef GOEP_SERVER_ERTM_BUFFER
 #define GOEP_SERVER_ERTM_BUFFER 2000
 #endif

@@ -20,6 +20,24 @@
 #define ENABLE_CLASSIC
 #define ENABLE_CROSS_TRANSPORT_KEY_DERIVATION
 #define ENABLE_GOEP_L2CAP
+
+/*
+ * Room for GOEP's ERTM channel to be set up at all.
+ *
+ * l2cap_ertm_setup_buffers() lays out one MTU for reassembly, then four receive
+ * and four transmit buffers of one MPS each, and asserts that they fit. The
+ * GOEP server asks for an MTU of half this value and four buffers each way, so
+ * with the 2000 it defaults to the layout needs about nine thousand bytes and
+ * gets two - the assert fires, or with asserts compiled out the channel is
+ * quietly never opened, which is what an accepted connection that never opens
+ * turned out to be.
+ *
+ * That mattered more than a stalled bearer. Single Response Mode is a GOEP 2.0
+ * feature and GOEP 2.0 is OBEX over L2CAP: without this channel there is no
+ * SRM, and without SRM every OBEX packet costs a round trip - which is what
+ * held file transfers to seventeen packets a second.
+ */
+#define GOEP_SERVER_ERTM_BUFFER 20000
 #define ENABLE_HFP_WIDE_BAND_SPEECH
 #define ENABLE_L2CAP_ENHANCED_RETRANSMISSION_MODE
 #define ENABLE_L2CAP_LE_CREDIT_BASED_FLOW_CONTROL_MODE
