@@ -149,7 +149,9 @@ static void opp_file_close(bool keep){
                     (unsigned long) opp_received,
                     (unsigned long) opp_packets,
                     (unsigned long) elapsed_ms,
-                    (unsigned long) ((opp_received * 1000) / elapsed_ms),
+                    /* in 64 bits: nine megabytes times a thousand is well past
+                     * what 32 bits hold, and the rate printed was nonsense */
+                    (unsigned long) (((uint64_t) opp_received * 1000) / elapsed_ms),
                     (unsigned long) (opp_packets ? (opp_received / opp_packets) : 0));
     } else {
         remove(opp_path);

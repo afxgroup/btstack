@@ -52,7 +52,22 @@
 
 #define USB_MAX_PATH_LEN        7
 #define USB_DEFAULT_TIMEOUT_MS  2000
-#define USB_POLL_INTERVAL_MS    50  /* safety net only: the run loop also wakes up
+/*
+ * How often to look for completed transfers when nothing wakes us.
+ *
+ * This was 50 ms and described as a safety net, because the run loop also has
+ * the USB port's signal in its wait mask and should wake the moment a transfer
+ * completes. The measurement says otherwise: a file arrived in 8944 full sized
+ * packets over 527 seconds - seventeen a second, one every 59 ms, with a 50 ms
+ * timer behind it. Round numbers like that do not come from radios. The
+ * transfer was running at the rate of this timer, which means the signal is not
+ * waking us and the "safety net" has been carrying the whole load.
+ *
+ * Five milliseconds until that is understood. It is the wrong fix - the signal
+ * should work - but it says whether the diagnosis is right, and a tenfold
+ * change in throughput is not something to mistake for noise.
+ */
+#define USB_POLL_INTERVAL_MS    5   /* was 50: the run loop also wakes up
                                      * on the USB MsgPort signal, so this timer just
                                      * catches a missed completion. Each tick costs a
                                      * timer.device SendIO/AbortIO round trip. */
