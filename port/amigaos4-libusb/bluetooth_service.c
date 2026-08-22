@@ -1228,6 +1228,24 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 
             if (device == NULL){
                 if (handler == NULL){
+                    /*
+                     * Only while somebody is actually looking.
+                     *
+                     * A device we cannot drive gets no table entry, so
+                     * device_for_addr() never finds it and every single
+                     * advertisement it sends arrived here as new - one message
+                     * allocated and delivered to every subscriber, for every
+                     * beacon in the room, several times a second. The window at
+                     * the other end then rebuilt both its lists for each one.
+                     * That is where the service's processor time was going.
+                     *
+                     * Outside a discovery nobody needs that stream: the lists
+                     * are filled by asking, and what is worth knowing about is
+                     * in the table anyway. During one it is exactly what is
+                     * wanted, and it lasts thirty seconds.
+                     */
+                    if (!inquiry_requested) break;
+
                     BTDeviceInfo seen;
                     memset(&seen, 0, sizeof(seen));
                     memcpy(seen.bd_addr, addr, 6);

@@ -270,12 +270,23 @@ static bt_result_t bt_command_name(bt_command_t command, char * name, uint32 nam
  * meaningful sense - and there is nothing to be notified by, since the thing
  * that would send the notification is the thing that has gone.
  */
-#define SERVICE_CHECK_SECONDS 2
+/*
+ * The window catches up on a tick rather than on every event.
+ *
+ * Rebuilding both lists means a round trip to the service and a listbrowser
+ * node allocated for every row of both, and it was being done once per event -
+ * which during a scan is several times a second, every one of them redrawing
+ * the whole window. Once a second is as much as anybody can read, and the
+ * difference is most of a processor.
+ */
+#define SERVICE_CHECK_SECONDS 1
 
 static struct MsgPort     * timer_port;
 static struct TimeRequest * timer_req;
 static bool                 timer_pending;
 static bool                 service_running;
+static bool                 lists_dirty;
+static uint32               ticks_to_service_check;
 
 static void timer_arm(uint32 seconds){
     if (timer_req == NULL) return;
@@ -939,11 +950,25 @@ int main(void){
             while (GetMsg(timer_port) != NULL) { /* drain */ }
             timer_pending = false;
 
-            bool running = service_present();
-            if (running != service_running){
-                service_state_changed(running);
+            if (ticks_to_service_check == 0){
+                ticks_to_service_check = 2;
+                bool running = service_present();
+                if (running != service_running){
+                    service_state_changed(running);
+                    lists_dirty = true;
+                }
+            } else {
+                ticks_to_service_check--;
+            }
+
+            if (lists_dirty && service_running){
+                lists_dirty = false;
+                lists_refresh();
+                nearby_show();
+                known_show();
                 buttons_update();
             }
+
             timer_arm(SERVICE_CHECK_SECONDS);
         }
 
@@ -1005,12 +1030,8 @@ int main(void){
                 FreeSysObject(ASOT_MESSAGE, event);
             }
 
-            if (refresh_known) lists_refresh();
-            if (refresh_nearby || refresh_known){
-                nearby_show();
-                known_show();
-                buttons_update();
-            }
+            /* marked, and picked up on the next tick - see SERVICE_CHECK_SECONDS */
+            if (refresh_nearby || refresh_known) lists_dirty = true;
         }
 
         if (signals & window_sig){
