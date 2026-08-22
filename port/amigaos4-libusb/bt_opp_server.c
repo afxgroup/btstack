@@ -232,6 +232,20 @@ static void opp_handle_request(void){
     obex_srm_server_handle_headers(&opp_srm);
     opp_packets++;
 
+    /*
+     * Say once whether Single Response Mode is running.
+     *
+     * It was added to remove the round trip per packet and changed nothing,
+     * and it was never checked whether it actually came on. Without it the
+     * sender puts one packet, waits for the answer, and puts the next - which
+     * is one packet per response latency, and one packet every 58 ms is exactly
+     * what that looks like.
+     */
+    if (opp_packets == 2){
+        DebugPrintF("opp: single response mode is %s\n",
+                    obex_srm_server_is_srm_active(&opp_srm) ? "ON" : "OFF");
+    }
+
     opp_response_is_connect = false;
 
     switch (info.opcode){

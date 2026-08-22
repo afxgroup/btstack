@@ -53,21 +53,15 @@
 #define USB_MAX_PATH_LEN        7
 #define USB_DEFAULT_TIMEOUT_MS  2000
 /*
- * How often to look for completed transfers when nothing wakes us.
+ * Safety net only: the run loop also wakes on the USB port signal.
  *
- * This was 50 ms and described as a safety net, because the run loop also has
- * the USB port's signal in its wait mask and should wake the moment a transfer
- * completes. The measurement says otherwise: a file arrived in 8944 full sized
- * packets over 527 seconds - seventeen a second, one every 59 ms, with a 50 ms
- * timer behind it. Round numbers like that do not come from radios. The
- * transfer was running at the rate of this timer, which means the signal is not
- * waking us and the "safety net" has been carrying the whole load.
- *
- * Five milliseconds until that is understood. It is the wrong fix - the signal
- * should work - but it says whether the diagnosis is right, and a tenfold
- * change in throughput is not something to mistake for noise.
+ * Tried at 5 ms to test whether this timer was pacing transfers, since packets
+ * were arriving one every 59 ms with this at 50. It made no difference at all -
+ * 517 seconds against 527 for the same file - so the timer was never the
+ * constraint and the packets really do arrive that slowly. Back to 50, because
+ * polling ten times as often for nothing is just heat.
  */
-#define USB_POLL_INTERVAL_MS    5   /* was 50: the run loop also wakes up
+#define USB_POLL_INTERVAL_MS    50  /* the run loop also wakes up
                                      * on the USB MsgPort signal, so this timer just
                                      * catches a missed completion. Each tick costs a
                                      * timer.device SendIO/AbortIO round trip. */
@@ -737,7 +731,15 @@ static int usb_send_packet(uint8_t packet_type, uint8_t * packet, int size){
                 }
                 /* submit not supported for OUT endpoints: stop trying */
                 log_error("acl out async submit failed, falling back to sync bulk transfer");
-                printf("usb: async ACL out not available, using sync bulk transfer\n");
+                /*
+                 * Worth being loud about. A synchronous bulk transfer blocks
+                 * the run loop until it completes, so every outgoing packet -
+                 * including the RFCOMM credits that decide how fast the other
+                 * side may send - costs that whole time. It would pace an
+                 * incoming transfer exactly the way one is being paced.
+                 */
+                printf("usb: *** async ACL out not available, using SYNCHRONOUS bulk transfer\n");
+                printf("usb: *** every outgoing packet will block the run loop\n");
                 acl_out_async = false;
             }
             r = libusb_bulk_transfer(usb_handle, acl_out_addr, packet, size, &transferred, USB_DEFAULT_TIMEOUT_MS);
