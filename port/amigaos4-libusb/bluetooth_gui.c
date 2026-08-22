@@ -146,6 +146,9 @@ static void status_show(LONG message_id){
     SetWindowTitles(window, (CONST_STRPTR) GetString(message_id), (CONST_STRPTR) -1);
 }
 
+/* who we are pairing with and the number to check, in the title bar */
+static void pairing_show(const char * name);
+
 /* the same, for something that has to be filled in before it can be shown */
 static void status_text(CONST_STRPTR text){
     if (window == NULL) return;
@@ -401,6 +404,26 @@ static const char * name_or_unknown(const char * name){
     return (name[0] != 0) ? name : (const char *) GetString(MSG_NO_NAME);
 }
 
+/*
+ * Who we are pairing with, while the title is saying so.
+ *
+ * A device that dialled us has no name yet when it asks to pair - the name is a
+ * request of its own and answers a moment later - so the title said "(no name)"
+ * and stayed wrong for the rest of the pairing, which is the one moment the
+ * user is reading it.
+ */
+static uint8    pairing_addr[6];
+static uint32   pairing_passkey;
+static bool     pairing_shown;
+
+static void pairing_show(const char * name){
+    char line[128];
+    snprintf(line, sizeof(line), (const char *) GetString(MSG_PAIRING_PASSKEY),
+             name_or_unknown(name), (unsigned long) pairing_passkey);
+    status_text((CONST_STRPTR) line);
+    DebugPrintF("BluetoothGUI: %s\n", line);
+}
+
 static void addr_to_str(const uint8 * addr, char * out){
     sprintf(out, "%02X:%02X:%02X:%02X:%02X:%02X",
             addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
@@ -435,8 +458,11 @@ static Object * gad_forget;
 static Object * gad_service;
 static Object * gad_name;
 static Object * gad_folder;
+
+
 static bool     scan_running;
 static bool     scan_shown;   /* what the button currently says */
+
 
 /* the listbrowser must not be looking at a list while it is being rebuilt */
 static int32 selected_row(Object * gadget);
@@ -930,6 +956,12 @@ int main(void){
                 switch (event->bse_Event){
                     case BTEVENT_DEVICE_FOUND:
                     case BTEVENT_DEVICE_UPDATED:
+                        /* the name of whoever we are pairing with, arriving late */
+                        if (pairing_shown &&
+                            (memcmp(pairing_addr, event->bse_Device.bd_addr, 6) == 0) &&
+                            (event->bse_Device.name[0] != 0)){
+                            pairing_show(event->bse_Device.name);
+                        }
                         nearby_update(&event->bse_Device);
                         refresh_nearby = true;
                         refresh_known  = true;
@@ -960,12 +992,10 @@ int main(void){
                          * Shell it happened to be started from is neither
                          * reliable nor somewhere anyone watches.
                          */
-                        char line[128];
-                        snprintf(line, sizeof(line), (const char *) GetString(MSG_PAIRING_PASSKEY),
-                                 name_or_unknown(event->bse_Device.name),
-                                 (unsigned long) event->bse_Passkey);
-                        status_text((CONST_STRPTR) line);
-                        DebugPrintF("BluetoothGUI: %s\n", line);
+                        memcpy(pairing_addr, event->bse_Device.bd_addr, 6);
+                        pairing_passkey = event->bse_Passkey;
+                        pairing_shown   = true;
+                        pairing_show(event->bse_Device.name);
                         break;
                     }
                     default:

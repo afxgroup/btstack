@@ -7,6 +7,11 @@
 
 #include "bt_opp_server.h"
 
+#include <proto/exec.h>
+
+/* the SDK's UNUSED is an attribute, not BTstack's UNUSED(x) */
+#undef UNUSED
+
 #include "btstack_debug.h"
 #include "btstack_defines.h"
 #include "btstack_event.h"
@@ -90,10 +95,10 @@ static void opp_file_close(bool keep){
     opp_file = NULL;
 
     if (keep){
-        printf("Bluetooth: received '%s' (%lu bytes)\n", opp_path, (unsigned long) opp_received);
+        DebugPrintF("opp: received '%s' (%lu bytes)\n", opp_path, (unsigned long) opp_received);
     } else {
         remove(opp_path);
-        printf("Bluetooth: transfer of '%s' was abandoned\n", opp_path);
+        DebugPrintF("opp: transfer of '%s' was abandoned\n", opp_path);
     }
     opp_received = 0;
 }
@@ -113,7 +118,7 @@ static bool opp_file_open(void){
 
     opp_file = fopen(opp_path, "wb");
     if (opp_file == NULL){
-        printf("Bluetooth: cannot write '%s'\n", opp_path);
+        DebugPrintF("opp: cannot write '%s'\n", opp_path);
         return false;
     }
     opp_received = 0;
@@ -146,7 +151,7 @@ static void opp_parser_callback(void * user_data, uint8_t header_id, uint16_t to
                 if (!opp_file_open()) break;
             }
             if (fwrite(data_buffer, 1, data_len, opp_file) != data_len){
-                printf("Bluetooth: writing '%s' failed\n", opp_path);
+                DebugPrintF("opp: writing '%s' failed\n", opp_path);
                 opp_file_close(false);
                 break;
             }
@@ -236,6 +241,7 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                      * name, which is dealt with above.
                      */
                     opp_goep_cid = goep_subevent_incoming_connection_get_goep_cid(packet);
+                    DebugPrintF("opp: incoming connection, accepting\n");
                     goep_server_accept_connection(opp_goep_cid);
                     break;
 
@@ -243,7 +249,7 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                     opp_goep_cid = goep_subevent_connection_opened_get_goep_cid(packet);
                     opp_name[0]  = 0;
                     obex_parser_init_for_request(&opp_parser, &opp_parser_callback, NULL);
-                    if (opp_verbose) log_info("opp: connection opened");
+                    DebugPrintF("opp: connection opened\n");
                     break;
 
                 case GOEP_SUBEVENT_CONNECTION_CLOSED:
@@ -352,5 +358,6 @@ void bt_opp_server_init(const char * service_name){
                           (service_name != NULL) ? service_name : "Object Push");
     sdp_register_service(opp_sdp_record);
 
-    log_info("opp: object push registered, files go to %s", opp_folder);
+    DebugPrintF("opp: object push registered on RFCOMM %u / L2CAP 0x%04x, files go to %s\n",
+                OPP_RFCOMM_CHANNEL, OPP_L2CAP_PSM, opp_folder);
 }
