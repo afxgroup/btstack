@@ -113,6 +113,17 @@ typedef enum {
  * mixes and what the SBC encoder wants: on this machine no conversion happens
  * at all.
  *
+ * The size is headroom, not latency. The consumer drains at exactly the sample
+ * rate the stream negotiated, so in the steady state the ring sits nearly empty
+ * however large it is - what it has to hold is one uninterruptible AHI mix
+ * burst plus whatever lateness the run loop adds. At 8192 frames that is twice
+ * the largest burst AHI will hand over with MaxPlaySamples at 4096, which is
+ * the figure the USB audio driver settled on after 16384 proved long enough to
+ * click under load.
+ *
+ * The latency anyone actually hears is mostly the sink's own buffer, which in
+ * A2DP is hundreds of milliseconds and is not ours to choose.
+ *
  * Running dry is silence, not an error. A producer with nothing to say is
  * normal and the consumer fills the gap rather than stalling the stream, since
  * an A2DP sink that stops receiving drops the connection.
