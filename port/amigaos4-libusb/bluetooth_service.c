@@ -115,6 +115,9 @@ typedef struct {
     const bt_profile_handler_t  * handler;
     bool                          in_use;      /* entry allocated */
     bool                          autoconnect; /* reconnect when seen again */
+    uint8_t                       page_scan_repetition_mode;
+    uint16_t                      clock_offset;
+    bool                          name_asked;  /* a remote name request has been made */
 } bt_device_t;
 
 static bt_device_t devices[MAX_DEVICES];
@@ -1080,6 +1083,45 @@ static bool discovery_needed(void){
     return false;
 }
 
+/*
+ * Ask a discovered device what it is called.
+ *
+ * A Classic device may put its name in the inquiry response, and many do - a
+ * keyboard and a mouse both did, which is why those two were the only ones with
+ * names. Televisions and headphones generally do not, and the only way to learn
+ * theirs is to ask, which is a request of its own and pages the device.
+ *
+ * So it is done between inquiry rounds, one device at a time, and never twice
+ * for the same device however it turns out. A name is worth a page; it is not
+ * worth pages without end.
+ */
+static bool remote_name_request_pending;
+
+static bool ask_one_missing_name(void){
+    if (remote_name_request_pending) return true;
+    if (pending_device != NULL)      return false;   /* a connection is in flight */
+    if (shutdown_requested)          return false;
+
+    uint8_t i;
+    for (i = 0; i < MAX_DEVICES; i++){
+        bt_device_t * device = &devices[i];
+        if (!device->in_use)                 continue;
+        if (device->info.addr_type != 0xff)  continue;   /* Classic only */
+        if (device->name_asked)              continue;
+        if (device->info.name[0] != 0)       continue;
+
+        device->name_asked = true;
+        if (gap_remote_name_request(device->info.bd_addr,
+                                    device->page_scan_repetition_mode,
+                                    device->clock_offset | 0x8000) == ERROR_CODE_SUCCESS){
+            remote_name_request_pending = true;
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 static void inquiry_start(void){
     /*
      * Inquiry is for finding a device we do not have yet.
@@ -1493,6 +1535,10 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 
             device->info.class_of_device = cod;
             device->info.rssi = gap_event_inquiry_result_get_rssi(packet);
+            /* kept for the name request below: with these it can page the
+             * device directly instead of searching for it */
+            device->page_scan_repetition_mode = gap_event_inquiry_result_get_page_scan_repetition_mode(packet);
+            device->clock_offset              = gap_event_inquiry_result_get_clock_offset(packet);
 
             if (gap_event_inquiry_result_get_name_available(packet)){
                 uint8_t name_len = gap_event_inquiry_result_get_name_len(packet);
@@ -1535,8 +1581,8 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
         case GAP_EVENT_INQUIRY_COMPLETE:
             inquiring = false;
 
-            /* the controller is free now, so the connection that was waiting
-             * for it can go out - and no new inquiry until it has */
+            /* a connection somebody asked for comes before anything else the
+             * radio could be doing */
             if (classic_connect_deferred){
                 classic_connect_deferred = false;
                 if (pending_device != NULL){
@@ -1544,6 +1590,10 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                 }
                 break;
             }
+
+            /* otherwise the radio is free between rounds, which is when a name
+             * can be asked for without taking it from anything */
+            if (ask_one_missing_name()) break;
             /* inquiry is bounded, so keep it going for as long as we are
              * looking - otherwise a Classic device switched on a minute later
              * would never be found */
@@ -1655,7 +1705,16 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             break;
 
         case HCI_EVENT_REMOTE_NAME_REQUEST_COMPLETE: {
-            if (hci_event_remote_name_request_complete_get_status(packet) != ERROR_CODE_SUCCESS) break;
+            remote_name_request_pending = false;
+
+            /* whether it answered or not, carry on: another device is waiting
+             * to be asked and the inquiry is waiting to be restarted */
+            if (hci_event_remote_name_request_complete_get_status(packet) != ERROR_CODE_SUCCESS){
+                if (!ask_one_missing_name() && inquiry_wanted && !shutdown_requested){
+                    inquiry_start();
+                }
+                break;
+            }
             hci_event_remote_name_request_complete_get_bd_addr(packet, addr);
             device = device_for_addr(addr);
             if (device == NULL) break;
@@ -1666,6 +1725,10 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             btstack_strcpy(device->info.name, sizeof(device->info.name), name);
             service_log("service: %s is called '%s'\n", bd_addr_to_str(addr), device->info.name);
             bt_service_port_notify(BTEVENT_DEVICE_UPDATED, &device->info, 0);
+
+            if (!ask_one_missing_name() && inquiry_wanted && !shutdown_requested){
+                inquiry_start();
+            }
             break;
         }
 
