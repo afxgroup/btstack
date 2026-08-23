@@ -36,8 +36,15 @@
  * feature and GOEP 2.0 is OBEX over L2CAP: without this channel there is no
  * SRM, and without SRM every OBEX packet costs a round trip - which is what
  * held file transfers to seventeen packets a second.
+ *
+ * The number comes from the packet log rather than a guess. The negotiated MPS
+ * is 1238, and GOEP asks for an MTU of half the buffer with four buffers each
+ * way, so the layout needs buffer/2 + 8 * 1238. At 20000 that is 19904 of
+ * 20000, leaving 96 bytes for the eight packet state structures - which do not
+ * fit, and the channel was closed during configuration. 28000 leaves four
+ * thousand spare.
  */
-#define GOEP_SERVER_ERTM_BUFFER 20000
+#define GOEP_SERVER_ERTM_BUFFER 28000
 #define ENABLE_HFP_WIDE_BAND_SPEECH
 #define ENABLE_L2CAP_ENHANCED_RETRANSMISSION_MODE
 #define ENABLE_L2CAP_LE_CREDIT_BASED_FLOW_CONTROL_MODE
