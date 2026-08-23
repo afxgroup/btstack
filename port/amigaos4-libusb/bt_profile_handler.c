@@ -17,10 +17,12 @@
 #include "bt_profile_handler.h"
 #include "bt_handler_hid.h"
 #include "bt_handler_hid_classic.h"
+#include "bt_handler_a2dp.h"
 
 static const bt_profile_handler_t * handlers[] = {
     &bt_handler_hid,
     &bt_handler_hid_classic,
+    &bt_handler_a2dp,
     NULL
 };
 

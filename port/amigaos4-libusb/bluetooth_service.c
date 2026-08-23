@@ -48,6 +48,7 @@
 #include "amigaos4_input.h"
 #include "bt_handler_hid.h"
 #include "bt_handler_hid_classic.h"
+#include "bt_handler_a2dp.h"
 #include "bt_usb_watch.h"
 #include "bt_opp_server.h"
 #include "classic/sdp_server.h"
@@ -1997,6 +1998,7 @@ int btstack_main(int argc, const char * argv[]){
     }
     bt_handler_hid_set_verbose(verbose);
     bt_handler_hid_classic_set_verbose(verbose);
+    bt_handler_a2dp_set_verbose(verbose);
 
     have_console = (IsInteractive(Output()) == DOSTRUE);
 
