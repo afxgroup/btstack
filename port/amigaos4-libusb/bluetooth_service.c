@@ -180,6 +180,8 @@ static uint32_t classic_reconnect_ms = CLASSIC_RECONNECT_MIN_MS;
 #define INCOMING_QUIET_MS 15000
 static uint32_t incoming_quiet_until_ms;
 
+
+
 /* device we already asked gap_connect_cancel() for, used as a watchdog: see
  * connection_timeout_handler() */
 static bt_device_t * connection_cancel_pending_for;
@@ -901,6 +903,45 @@ static uint8_t devices_load(void){
  * other one invisible for ever. Scanning is also how a known device that is
  * switched on later gets reconnected, so idle means scanning.
  */
+/*
+ * Stop scanning while a file is arriving.
+ *
+ * The LE scan runs a quarter of the time, permanently, because that is how a
+ * known device is noticed coming back. During a transfer it is a quarter of the
+ * radio spent looking for devices nobody asked about, taken from the link that
+ * is actually doing something - the same mistake as paging during a transfer,
+ * which was already fixed without noticing this one alongside it.
+ *
+ * Checked on a tick rather than driven by the transfer, so the service does not
+ * need to know when one starts. A second of scanning either way costs nothing.
+ */
+#define TRANSFER_WATCH_MS 1000
+static btstack_timer_source_t transfer_watch_timer;
+static bool                   scan_paused_for_transfer;
+
+static void transfer_watch(btstack_timer_source_t * ts){
+    UNUSED(ts);
+
+    btstack_run_loop_remove_timer(&transfer_watch_timer);
+    btstack_run_loop_set_timer(&transfer_watch_timer, TRANSFER_WATCH_MS);
+    btstack_run_loop_add_timer(&transfer_watch_timer);
+
+    if (shutdown_requested) return;
+
+    bool busy = bt_opp_server_is_busy();
+
+    if (busy && scanning && !scan_paused_for_transfer){
+        gap_stop_scan();
+        scanning                 = false;
+        scan_paused_for_transfer = true;
+        service_log("service: a transfer is running, pausing the scan\n");
+    } else if (!busy && scan_paused_for_transfer){
+        scan_paused_for_transfer = false;
+        service_log("service: transfer done, scanning again\n");
+        scan_start(true);
+    }
+}
+
 static void scan_resume_if_idle(void){
     if (shutdown_requested)     return;
     if (pending_device != NULL) return;   /* another attempt is running */
@@ -1149,6 +1190,10 @@ static void service_start_working(void){
     devices_load();
     scan_start(true);
     classic_reconnect_bonded();   /* and it re-arms itself from here on */
+
+    btstack_run_loop_set_timer_handler(&transfer_watch_timer, &transfer_watch);
+    btstack_run_loop_set_timer(&transfer_watch_timer, TRANSFER_WATCH_MS);
+    btstack_run_loop_add_timer(&transfer_watch_timer);
 }
 
 /* -------------------------------------------------------------------------- */
