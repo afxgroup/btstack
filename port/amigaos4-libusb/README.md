@@ -199,6 +199,29 @@ straight in. The built-in text is the fallback handed to `GetCatalogStr()`, so
 everything reads correctly with no catalog installed, with one that does not
 cover a string, or with no locale.library at all.
 
+## Receiving files, and why they arrive slowly
+
+Object Push is offered over RFCOMM, which is GOEP 1.1, and a transfer runs at
+about 17 kB/s - roughly seventeen packets a second of 1016 bytes each.
+
+That is not a bandwidth limit, it is a waiting one. Single Response Mode lets a
+sender stream instead of waiting for a response to every packet, and SRM is a
+GOEP 2.0 feature: GOEP 2.0 is OBEX over L2CAP. Over RFCOMM the sender never asks
+for it, so every packet costs a round trip.
+
+The L2CAP bearer was tried and does not negotiate here. BTstack's GOEP server
+sets `ertm_mandatory` in its L2CAP configuration, so a peer that will not agree
+to Enhanced Retransmission Mode on that PSM leaves it no choice but to close the
+channel - which the sender reports as the connection being reset. Enlarging
+`GOEP_SERVER_ERTM_BUFFER` does not help and cannot: l2cap derives the MPS from
+it, so the layout that has to fit grows with the room it is given.
+
+Advertising a bearer that gets chosen in preference and then fails is worse than
+not offering it, so only RFCOMM is advertised. Anyone wanting to take this
+further should start from a packet log: the L2CAP configure request from the far
+end says what mode it is proposing, and that is the fact everything else turns
+on.
+
 ## Bluetooth Classic keyboards
 
 Four things are needed to keep one connected, and none of them is obvious.

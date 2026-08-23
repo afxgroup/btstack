@@ -34,21 +34,30 @@
 
 #define OPP_RFCOMM_CHANNEL     9
 /*
- * Both bearers again, with the L2CAP one given room to work.
+ * RFCOMM only. GOEP 1.1, and the reason is worth writing down.
  *
- * This was cut to RFCOMM alone because the L2CAP channel was accepted and then
- * never opened. The cause turned out to be a buffer: l2cap lays out the ERTM
- * reassembly buffer, four receive and four transmit buffers inside the block
- * GOEP hands it, and GOEP's default block is 2000 bytes for a layout needing
- * about nine thousand. The port's config now gives it twenty.
+ * GOEP 2.0 - OBEX over L2CAP - is what makes Single Response Mode possible,
+ * and SRM is what removes the response wait between packets. Without it every
+ * OBEX packet costs a round trip and a transfer runs at about seventeen a
+ * second, which is what this does. So the L2CAP bearer was worth several
+ * attempts.
  *
- * It matters for speed, not just for choice. Single Response Mode is a GOEP 2.0
- * feature and GOEP 2.0 is OBEX over L2CAP - over RFCOMM the sender never asks
- * for it, so every packet waits for its response and a transfer runs at
- * seventeen packets a second whatever else is done. Offering L2CAP is what
- * makes SRM possible at all.
+ * It does not negotiate with this peer. The packet log shows the channel
+ * accepted, the far end's configure request handled, and then a disconnection
+ * sent by us. BTstack's GOEP server sets ertm_mandatory in its L2CAP
+ * configuration, so a peer that does not agree to Enhanced Retransmission Mode
+ * on this PSM leaves it no choice but to close the channel - and that is what
+ * "connection reset by peer" was, from the other side.
+ *
+ * Enlarging the ERTM buffer does not help and cannot: l2cap derives the MPS
+ * from it, so the layout it has to fit grows with the room it is given. 20000
+ * gave an MPS of 1238, 28000 gave 1738, and the fit is as tight either way.
+ *
+ * Advertising a bearer that is chosen in preference and then fails is worse
+ * than not offering it: the sender picks it, waits, and reports a failure.
+ * RFCOMM is slower and works.
  */
-#define OPP_L2CAP_PSM          0x1015
+#define OPP_L2CAP_PSM          0
 #define OPP_MAX_FRAME_SIZE     0xFFFF
 #define OPP_NAME_MAX           64
 #define OPP_PATH_MAX           256
@@ -419,7 +428,7 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 /* -------------------------------------------------------------------------- */
 
 static void opp_create_sdp_record(uint8_t * service, uint32_t service_record_handle,
-                                  uint8_t rfcomm_channel, uint16_t l2cap_psm, const char * name){
+                                  uint8_t rfcomm_channel, const char * name){
     uint8_t * attribute;
     de_create_sequence(service);
 
@@ -464,11 +473,6 @@ static void opp_create_sdp_record(uint8_t * service, uint32_t service_record_han
     }
     de_pop_sequence(service, attribute);
 
-    /* GOEP L2CAP PSM: how a GOEP 2.0 sender reaches us, and the only way SRM
-     * is ever negotiated */
-    de_add_number(service, DE_UINT, DE_SIZE_16, BLUETOOTH_ATTRIBUTE_GOEP_L2CAP_PSM);
-    de_add_number(service, DE_UINT, DE_SIZE_16, l2cap_psm);
-
     de_add_number(service, DE_UINT, DE_SIZE_16, 0x0100);   /* ServiceName */
     de_add_data(service, DE_STRING, (uint16_t) strlen(name), (uint8_t *) name);
 
@@ -504,10 +508,10 @@ void bt_opp_server_init(const char * service_name){
 
     memset(opp_sdp_record, 0, sizeof(opp_sdp_record));
     opp_create_sdp_record(opp_sdp_record, sdp_create_service_record_handle(),
-                          OPP_RFCOMM_CHANNEL, OPP_L2CAP_PSM,
+                          OPP_RFCOMM_CHANNEL,
                           (service_name != NULL) ? service_name : "Object Push");
     sdp_register_service(opp_sdp_record);
 
-    DebugPrintF("opp: object push on RFCOMM %u and L2CAP 0x%04x, files go to %s\n",
-                OPP_RFCOMM_CHANNEL, OPP_L2CAP_PSM, opp_folder);
+    DebugPrintF("opp: object push on RFCOMM channel %u, files go to %s\n",
+                OPP_RFCOMM_CHANNEL, opp_folder);
 }
