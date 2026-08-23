@@ -29,8 +29,11 @@ cp "$PORT/../amigaos4-ahi/bluetooth.audio"    "$OUT/Devs/AHI/"
 cp "$PORT/../amigaos4-ahi/BLUETOOTH"          "$OUT/Devs/AudioModes/"
 cp "$PORT/firmware/"rtl*                      "$OUT/Firmware/"
 cp "$PORT/install/Documentation/"*            "$OUT/Documentation/"
-cp "$PORT/README.md"                          "$OUT/"
-cp "$ROOT/LICENSE"                            "$OUT/"
+cp "$ROOT/LICENSE"                            "$OUT/Documentation/"
+
+# AmigaOS has no Markdown reader, so the readme ships as text. Converting it
+# here rather than keeping a second copy means the two cannot drift.
+python3 "$PORT/install/md2txt.py" "$PORT/README.md" "$OUT/Documentation/README.txt"
 
 if [ -n "$LIBUSB" ] && [ -f "$LIBUSB" ]; then
     cp "$LIBUSB" "$OUT/Libs/libusb-1.library"

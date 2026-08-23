@@ -4,8 +4,8 @@
 ; in C: because bt.usbfd starts it by name, the library in LIBS:, the GUI in
 ; SYS:Prefs where a preferences program belongs, the AHI sub-driver and its
 ; mode file where AHI looks for them, the function driver where the USB stack
-; looks for drivers, and the firmware where the service looks for it. Only the
-; documentation is the user's to place.
+; looks for drivers, the firmware where the service looks for it, and the
+; documentation in SYS:Documentation. Nothing here asks where to go.
 
 (set #app-name "Bluetooth for AmigaOS 4")
 
@@ -23,17 +23,14 @@
        "  BLUETOOTH         in DEVS:AudioModes\n"
        "  bt.usbfd          in DEVS:USB/fd\n"
        "  Realtek firmware  in SYS:Firmware/bt\n"
-       "  the documentation where you choose\n"))
+       "  the documentation   in SYS:Documentation\n"))
 
-(set #ask-dest
-  (cat "Where should the documentation go?\n\n"
-       "A drawer will be created here. The programs themselves are not "
-       "installed here - they go where the system expects to find them."))
-
-(set #ask-dest-help
-  (cat "Only the documents are placed here. Somewhere you will find them "
-       "again is the only requirement - a Utilities drawer is a reasonable "
-       "choice.\n\n" @askdir-help))
+(set #copy-doc-help
+  (cat "The documentation goes in SYS:Documentation, in a drawer of its own so "
+       "it does not mix with anything else already there.\n\n"
+       "It is plain text: AmigaOS has no Markdown reader, so the readme is "
+       "converted when the archive is made rather than shipped as markdown "
+       "nothing here can display.\n\n" @copyfiles-help))
 
 (set #copy-gui-help
   (cat "BluetoothGUI is where you name this machine, scan for devices, pair "
@@ -119,39 +116,19 @@
 (complete 0)
 
 ;-----------------------------------------------------------------------------
-; The documentation, wherever the user wants it
+; The documentation
 ;-----------------------------------------------------------------------------
 
-(set @default-dest
-  (askdir
-    (prompt #ask-dest)
-    (help   #ask-dest-help)
-    (default "SYS:Utilities")
-    (newpath)))
-
-(set #app-dest (tackon @default-dest "Bluetooth"))
-(makedir #app-dest (infos))
+(makedir "SYS:Documentation" (infos))
+(set #doc-dest "SYS:Documentation/Bluetooth")
+(makedir #doc-dest (infos))
 
 (copyfiles
-  (prompt "Installing the documentation")
-  (help   @copyfiles-help)
+  (prompt "Installing the documentation in SYS:Documentation")
+  (help   #copy-doc-help)
   (source "Documentation")
-  (dest   #app-dest)
+  (dest   #doc-dest)
   (all)
-)
-
-(copyfiles
-  (prompt "Installing the readme")
-  (help   @copyfiles-help)
-  (source "README.md")
-  (dest   #app-dest)
-)
-
-(copyfiles
-  (prompt "Installing the licence")
-  (help   @copyfiles-help)
-  (source "LICENSE")
-  (dest   #app-dest)
 )
 
 (complete 20)

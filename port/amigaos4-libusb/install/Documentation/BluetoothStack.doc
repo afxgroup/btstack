@@ -11,12 +11,17 @@ WHAT THIS IS
   system and keys reach every application, because the events go into
   input.device rather than into any one program.
 
-  Three parts, each doing one job.
+  It also plays sound out to Bluetooth headphones, through AHI, so any program
+  that already plays through AHI can reach them without knowing anything about
+  Bluetooth.
+
+  Four parts, each doing one job.
 
     BluetoothService   the stack itself, running as a background process
-    BluetoothGUI       a window for managing devices
+    BluetoothGUI       a window for managing devices, in SYS:Prefs
     bt.usbfd           a USB function driver that starts the service when a
                        controller is plugged in
+    bluetooth.audio    an AHI sub-driver, so headphones appear as an audio mode
 
   Plus bthid, a smaller program that drives a single LE device without the
   service, kept because it is useful for testing.
@@ -136,6 +141,31 @@ bt.usbfd
 
 
 --------------------------------------------------------------------------------
+bluetooth.audio
+--------------------------------------------------------------------------------
+
+  An AHI sub-driver, installed in DEVS:AHI, with its audio mode file BLUETOOTH
+  in DEVS:AudioModes. AHI reads the mode file at startup and opens the driver
+  named in it, so the two belong together - a mode file whose driver is missing
+  leaves an audio mode that cannot be used.
+
+  Once both are installed, a Bluetooth mode appears in the AHI preferences.
+  Choose it for a unit and anything playing through that unit comes out of
+  paired headphones.
+
+  The rate is fixed at 44100 Hz, 16 bit, stereo. That is not a limitation of
+  the driver but of the stream: the SBC encoder is configured for it and the
+  headphones agreed to it, so the AHI panel offers no choice. Mixing is left to
+  AHI, and the driver takes the mixed samples across to the service through a
+  small shared buffer, from where they are encoded and sent.
+
+  Nothing is heard until headphones are actually connected. Connecting them
+  makes no sound of its own, and with nothing playing the stream carries
+  silence rather than stopping - a headset that stops being fed drops the
+  connection.
+
+
+--------------------------------------------------------------------------------
 DEVICES
 --------------------------------------------------------------------------------
 
@@ -193,7 +223,8 @@ WHEN SOMETHING DOES NOT WORK
 NOT YET
 --------------------------------------------------------------------------------
 
-  Audio devices - headsets, speakers, microphones.
+  Audio in - microphones and headsets, which need a different profile from
+  the one used for playback.
   Serial port profile.
   Networking over Bluetooth.
 
