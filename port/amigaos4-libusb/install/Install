@@ -1,10 +1,11 @@
 ; Installer script for Bluetooth for AmigaOS 4
 ;
-; Five destinations, four of them fixed by what the system expects and one
-; asked for: the service belongs in C: because bt.usbfd starts it by name, the
-; library in LIBS:, the function driver where the USB stack looks for drivers,
-; and the firmware where the service looks for it. Only the GUI and the
-; documents are the user's to place.
+; Most destinations are fixed by what the system expects: the service belongs
+; in C: because bt.usbfd starts it by name, the library in LIBS:, the GUI in
+; SYS:Prefs where a preferences program belongs, the AHI sub-driver and its
+; mode file where AHI looks for them, the function driver where the USB stack
+; looks for drivers, and the firmware where the service looks for it. Only the
+; documentation is the user's to place.
 
 (set #app-name "Bluetooth for AmigaOS 4")
 
@@ -12,23 +13,33 @@
   (cat "\n" #app-name "\n\n"
        "A Bluetooth stack for AmigaOS 4, based on BTstack.\n\n"
        "Mice and keyboards, over both Bluetooth LE and Bluetooth Classic, "
-       "feeding input.device so they drive the whole machine.\n\n"
+       "feeding input.device so they drive the whole machine - and audio out "
+       "to Bluetooth headphones through AHI.\n\n"
        "This will install:\n\n"
+       "  BluetoothGUI      in SYS:Prefs\n"
        "  BluetoothService  in C:\n"
        "  libusb-1.library  in LIBS:\n"
+       "  bluetooth.audio   in DEVS:AHI\n"
+       "  BLUETOOTH         in DEVS:AudioModes\n"
        "  bt.usbfd          in DEVS:USB/fd\n"
        "  Realtek firmware  in SYS:Firmware/bt\n"
-       "  BluetoothGUI and the documents where you choose\n"))
+       "  the documentation where you choose\n"))
 
 (set #ask-dest
-  (cat "Where should BluetoothGUI and the documents go?\n\n"
-       "A drawer will be created here. This is not C: - only the service "
-       "itself belongs there, because bt.usbfd starts it by name."))
+  (cat "Where should the documentation go?\n\n"
+       "A drawer will be created here. The programs themselves are not "
+       "installed here - they go where the system expects to find them."))
 
 (set #ask-dest-help
-  (cat "The GUI is an ordinary program and can live anywhere. Somewhere you "
-       "will find it again is the only requirement - a Utilities drawer is a "
-       "reasonable choice.\n\n" @askdir-help))
+  (cat "Only the documents are placed here. Somewhere you will find them "
+       "again is the only requirement - a Utilities drawer is a reasonable "
+       "choice.\n\n" @askdir-help))
+
+(set #copy-gui-help
+  (cat "BluetoothGUI is where you name this machine, scan for devices, pair "
+       "them and forget them. It goes in SYS:Prefs because that is where a "
+       "preferences program belongs, and it can be started from there like "
+       "any other.\n\n" @copyfiles-help))
 
 (set #copy-service-help
   (cat "BluetoothService is the stack itself. It goes in C: because bt.usbfd "
@@ -38,6 +49,15 @@
 (set #copy-libusb-help
   (cat "libusb-1.library is how the stack reaches the USB controller. Nothing "
        "here works without it.\n\n" @copylib-help))
+
+(set #copy-audio-help
+  (cat "bluetooth.audio is an AHI sub-driver, and BLUETOOTH is the audio mode "
+       "file that tells AHI about it. AHI reads the mode file at startup and "
+       "opens the driver named in it, so the two belong together: a mode file "
+       "whose driver is missing gives an audio mode that cannot be used.\n\n"
+       "With both installed, a Bluetooth audio mode appears in the AHI "
+       "preferences and any program that plays through AHI can reach paired "
+       "headphones.\n\n" @copyfiles-help))
 
 (set #copy-usbfd-help
   (cat "bt.usbfd is a USB function driver. With it installed, plugging in a "
@@ -53,6 +73,11 @@
        "looks like broken hardware and is not.\n\n"
        "Only the two files for your controller are ever read.\n\n"
        @copyfiles-help))
+
+(set #ask-audio
+  (cat "Install the AHI audio driver, so that sound can be played through "
+       "Bluetooth headphones?\n\n"
+       "Answer no if you only want mice and keyboards."))
 
 (set #ask-usbfd
   (cat "Install bt.usbfd, so that plugging in a Bluetooth controller starts "
@@ -71,13 +96,21 @@
        "bt.usbfd will be skipped. Everything else is installed, and you can "
        "start BluetoothService yourself."))
 
+(set #no-ahi
+  (cat "DEVS:AHI does not exist, so AHI does not appear to be installed on "
+       "this system.\n\n"
+       "The audio driver will be skipped. Everything else is installed, and "
+       "mice and keyboards are unaffected."))
+
 (set #exit-msg
   (cat "\n" #app-name " is installed.\n\n"
-       "Plug in a Bluetooth controller and start BluetoothGUI, then give this "
-       "machine a name and press Scan.\n\n"
+       "Plug in a Bluetooth controller and open BluetoothGUI from the Prefs "
+       "drawer, then give this machine a name and press Scan.\n\n"
        "Put your mouse or keyboard into pairing mode, and when it appears in "
        "the top list, select it and press Pair. From then on it reconnects by "
        "itself.\n\n"
+       "For headphones, pair them the same way, then choose the Bluetooth "
+       "mode in the AHI preferences.\n\n"
        "BluetoothStack.doc has the rest, including what to do when something "
        "does not work.\n"))
 
@@ -86,7 +119,7 @@
 (complete 0)
 
 ;-----------------------------------------------------------------------------
-; Where the user's part goes
+; The documentation, wherever the user wants it
 ;-----------------------------------------------------------------------------
 
 (set @default-dest
@@ -100,21 +133,11 @@
 (makedir #app-dest (infos))
 
 (copyfiles
-  (prompt "Installing BluetoothGUI")
-  (help   @copyfiles-help)
-  (source "BluetoothGUI")
-  (dest   #app-dest)
-  (infos)
-  (confirm)
-)
-
-(copyfiles
   (prompt "Installing the documentation")
   (help   @copyfiles-help)
   (source "Documentation")
   (dest   #app-dest)
   (all)
-  (infos)
 )
 
 (copyfiles
@@ -131,11 +154,21 @@
   (dest   #app-dest)
 )
 
-(complete 25)
+(complete 20)
 
 ;-----------------------------------------------------------------------------
 ; The parts the system expects to find in particular places
 ;-----------------------------------------------------------------------------
+
+(copyfiles
+  (prompt "Installing BluetoothGUI in SYS:Prefs")
+  (help   #copy-gui-help)
+  (source "BluetoothGUI")
+  (dest   "SYS:Prefs")
+  (confirm)
+)
+
+(complete 35)
 
 (copyfiles
   (prompt "Installing BluetoothService in C:")
@@ -145,7 +178,7 @@
   (confirm)
 )
 
-(complete 40)
+(complete 45)
 
 ; copylib compares versions, so a newer library already installed is kept
 (copylib
@@ -157,6 +190,35 @@
 )
 
 (complete 55)
+
+;-----------------------------------------------------------------------------
+; The AHI sub-driver and its mode file, which go together
+;-----------------------------------------------------------------------------
+
+(if (askbool (prompt #ask-audio) (help #copy-audio-help) (default 1))
+  (
+    (if (exists "DEVS:AHI" (noreq))
+      (
+        (copyfiles
+          (prompt "Installing bluetooth.audio in DEVS:AHI")
+          (help   #copy-audio-help)
+          (source "Devs/AHI/bluetooth.audio")
+          (dest   "DEVS:AHI")
+        )
+        (makedir "DEVS:AudioModes")
+        (copyfiles
+          (prompt "Installing the audio mode file in DEVS:AudioModes")
+          (help   #copy-audio-help)
+          (source "Devs/AudioModes/BLUETOOTH")
+          (dest   "DEVS:AudioModes")
+        )
+      )
+      (message #no-ahi)
+    )
+  )
+)
+
+(complete 70)
 
 ;-----------------------------------------------------------------------------
 ; The USB function driver, if there is a USB stack to install it into
@@ -179,7 +241,7 @@
   )
 )
 
-(complete 70)
+(complete 85)
 
 ;-----------------------------------------------------------------------------
 ; Controller firmware

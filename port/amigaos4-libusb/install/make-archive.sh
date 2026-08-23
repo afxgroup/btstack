@@ -18,12 +18,15 @@ OUT="${1:-$PORT/build/BluetoothStack}"
 LIBUSB="${LIBUSB:-}"
 
 rm -rf "$OUT"
-mkdir -p "$OUT/C" "$OUT/Libs" "$OUT/Devs/USB/fd" "$OUT/Firmware" "$OUT/Documentation"
+mkdir -p "$OUT/C" "$OUT/Libs" "$OUT/Devs/USB/fd" "$OUT/Devs/AHI" \
+         "$OUT/Devs/AudioModes" "$OUT/Firmware" "$OUT/Documentation"
 
 cp "$PORT/install/Install"                    "$OUT/"
 cp "$PORT/build/BluetoothGUI"                 "$OUT/"
 cp "$PORT/build/BluetoothService"             "$OUT/C/"
 cp "$PORT/../amigaos4-usbfd/bt.usbfd"         "$OUT/Devs/USB/fd/"
+cp "$PORT/../amigaos4-ahi/bluetooth.audio"    "$OUT/Devs/AHI/"
+cp "$PORT/../amigaos4-ahi/BLUETOOTH"          "$OUT/Devs/AudioModes/"
 cp "$PORT/firmware/"rtl*                      "$OUT/Firmware/"
 cp "$PORT/install/Documentation/"*            "$OUT/Documentation/"
 cp "$PORT/README.md"                          "$OUT/"
