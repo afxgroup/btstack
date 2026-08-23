@@ -1373,6 +1373,32 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
              */
             if (!connectable && (device_for_addr(addr) == NULL)) break;
 
+            /*
+             * The name, before deciding anything with it.
+             *
+             * It used to be read after the device had been announced, which
+             * was too late to be used as a reason for announcing it.
+             */
+            char adv_name[32];
+            adv_name[0] = 0;
+            {
+                ad_context_t name_context;
+                for (ad_iterator_init(&name_context, ad_len, ad_data);
+                     ad_iterator_has_more(&name_context);
+                     ad_iterator_next(&name_context)){
+
+                    uint8_t data_type = ad_iterator_get_data_type(&name_context);
+                    if ((data_type != BLUETOOTH_DATA_TYPE_COMPLETE_LOCAL_NAME) &&
+                        (data_type != BLUETOOTH_DATA_TYPE_SHORTENED_LOCAL_NAME)) continue;
+
+                    uint8_t name_len = ad_iterator_get_data_len(&name_context);
+                    if (name_len >= sizeof(adv_name)) name_len = sizeof(adv_name) - 1;
+                    memcpy(adv_name, ad_iterator_get_data(&name_context), name_len);
+                    adv_name[name_len] = 0;
+                    break;
+                }
+            }
+
             const bt_profile_handler_t * handler = bt_profile_handler_probe(ad_data, ad_len);
 
             /*
@@ -1414,12 +1440,29 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                      */
                     if (!inquiry_requested) break;
 
+                    /*
+                     * And only if it says what it is.
+                     *
+                     * A great many LE devices advertise as connectable and give
+                     * no name - lightbulbs, plugs, sensors, the whole of a
+                     * house's automation. Their name lives in a GATT
+                     * characteristic that can only be read by connecting first,
+                     * so a list cannot show it. An entry reading "(no name)"
+                     * next to an address that changes every few minutes tells
+                     * the user nothing they can act on, and there were dozens.
+                     *
+                     * A device a handler wants is exempt: those are listed on
+                     * what they can do rather than what they are called.
+                     */
+                    if (adv_name[0] == 0) break;
+
                     BTDeviceInfo seen;
                     memset(&seen, 0, sizeof(seen));
                     memcpy(seen.bd_addr, addr, 6);
                     seen.addr_type = addr_type;
                     seen.rssi      = rssi;
                     seen.state     = BT_DEVICE_STATE_FOUND;
+                    btstack_strcpy(seen.name, sizeof(seen.name), adv_name);
                     bt_service_port_notify(BTEVENT_DEVICE_FOUND, &seen, 0);
                     break;
                 }
@@ -1436,35 +1479,13 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                 device->info.kind = handler->kind;
             }
 
-            /* pick up the name when the device advertises one */
-            ad_context_t context;
-            for (ad_iterator_init(&context, ad_len, ad_data);
-                 ad_iterator_has_more(&context);
-                 ad_iterator_next(&context)){
-
-                uint8_t data_type = ad_iterator_get_data_type(&context);
-                if ((data_type != BLUETOOTH_DATA_TYPE_COMPLETE_LOCAL_NAME) &&
-                    (data_type != BLUETOOTH_DATA_TYPE_SHORTENED_LOCAL_NAME)) continue;
-
-                uint8_t name_len = ad_iterator_get_data_len(&context);
-                if (name_len >= sizeof(device->info.name)) name_len = sizeof(device->info.name) - 1;
-                /*
-                 * Announce a name that has just been learned.
-                 *
-                 * A device is often seen before it says what it is called - the
-                 * name is in the scan response, which arrives separately - and
-                 * without this it stayed nameless in every list for as long as
-                 * it was in range, since a device is only announced when it is
-                 * new.
-                 */
-                if (memcmp(device->info.name, ad_iterator_get_data(&context), name_len) != 0){
-                    memcpy(device->info.name, ad_iterator_get_data(&context), name_len);
-                    device->info.name[name_len] = 0;
-                    if (!is_new){
-                        bt_service_port_notify(BTEVENT_DEVICE_UPDATED, &device->info, 0);
-                    }
+            /* a name learned later is worth announcing: it usually arrives in
+             * the scan response, separately from the advertisement */
+            if ((adv_name[0] != 0) && (strcmp(device->info.name, adv_name) != 0)){
+                btstack_strcpy(device->info.name, sizeof(device->info.name), adv_name);
+                if (!is_new){
+                    bt_service_port_notify(BTEVENT_DEVICE_UPDATED, &device->info, 0);
                 }
-                break;
             }
 
             if (is_new){
