@@ -53,15 +53,23 @@
 #define USB_MAX_PATH_LEN        7
 #define USB_DEFAULT_TIMEOUT_MS  2000
 /*
- * Safety net only: the run loop also wakes on the USB port signal.
+ * How often to look for completed transfers.
  *
- * Tried at 5 ms to test whether this timer was pacing transfers, since packets
- * were arriving one every 59 ms with this at 50. It made no difference at all -
- * 517 seconds against 527 for the same file - so the timer was never the
- * constraint and the packets really do arrive that slowly. Back to 50, because
- * polling ten times as often for nothing is just heat.
+ * Called a safety net because the run loop also waits on the USB port's signal,
+ * but the arithmetic says that signal never arrives. Sixteen hundred byte OBEX
+ * packets are two ACL packets each, and with four ACL reads in flight one poll
+ * can carry two OBEX packets; at a 50 ms timer that is forty a second, and a
+ * transfer measured thirty-eight. The timer has been setting the pace.
+ *
+ * An earlier test at 5 ms showed nothing, and could not have: OBEX was still
+ * waiting for a response to every packet at 58 ms, so nothing was queuing
+ * behind the poll. With Single Response Mode running, something is.
+ *
+ * Ten milliseconds, with more buffers so a poll carries a useful amount. The
+ * real fix is finding out why the completion signal does not wake the run loop,
+ * and this is not that.
  */
-#define USB_POLL_INTERVAL_MS    50  /* the run loop also wakes up
+#define USB_POLL_INTERVAL_MS    10  /* the run loop also wakes up
                                      * on the USB MsgPort signal, so this timer just
                                      * catches a missed completion. Each tick costs a
                                      * timer.device SendIO/AbortIO round trip. */
@@ -115,7 +123,7 @@ static uint8_t                  event_next;
  * With a handful in flight there is always a buffer waiting, and the round
  * trips overlap with the reception of the next packet instead of blocking it.
  */
-#define ACL_IN_BUFFERS 4
+#define ACL_IN_BUFFERS 16
 static libusb_async_transfer  * acl_transfer[ACL_IN_BUFFERS];
 
 /*
