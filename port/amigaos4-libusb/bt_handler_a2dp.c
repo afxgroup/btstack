@@ -154,28 +154,6 @@ void bt_handler_a2dp_set_source(bt_audio_source_t source){
     audio_source = source;
 }
 
-/*
- * The built-in source: a quiet tone.
- *
- * Not music, and not meant to be. It exists so the chain - connection, codec
- * negotiation, encoding, pacing, the sink's own buffering - can be proved end to
- * end without also depending on AHI. Something audible and steady makes a
- * dropout obvious in a way silence never would.
- */
-static uint16_t tone_source(int16_t * buffer, uint16_t num_frames){
-    static uint32_t phase;
-    uint16_t i;
-
-    for (i = 0; i < num_frames; i++){
-        /* about 440 Hz at 44100, at a level that will not startle anyone */
-        int16_t sample = (int16_t) (((phase % 100) < 50) ? 2000 : -2000);
-        phase += 441;
-        buffer[i * 2]     = sample;
-        buffer[i * 2 + 1] = sample;
-    }
-    return num_frames;
-}
-
 /* -------------------------------------------------------------------------- */
 
 static void fill_sbc_buffer(void){
@@ -189,17 +167,15 @@ static void fill_sbc_buffer(void){
         int16_t pcm[MAX_FRAMES_PER_ROUND * 2];
         /*
          * The ring first when a producer is filling it, then an explicit
-         * source, and the tone only when nothing else is playing - so the tone
-         * is what you hear when the chain works and nothing is feeding it,
-         * rather than something that has to be switched off.
+         * source. With neither, the stream carries silence: connecting
+         * headphones must not make a sound of its own, and the stream still
+         * has to keep flowing or the sink drops the connection.
          */
-        uint16_t got;
+        uint16_t got = 0;
         if ((audio_ring != NULL) && (audio_ring->bar_Write != audio_ring->bar_Read)){
             got = ring_source(pcm, frames_per_sbc);
         } else if (audio_source != NULL){
             got = audio_source(pcm, frames_per_sbc);
-        } else {
-            got = tone_source(pcm, frames_per_sbc);
         }
         if (got < frames_per_sbc){
             /* a source with nothing to say is silence, not a failure */
