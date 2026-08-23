@@ -29,6 +29,8 @@
 #include "classic/sdp_server.h"
 #include "classic/sdp_util.h"
 #include "bluetooth_sdp.h"
+#include "bluetooth_service.h"
+#include <exec/exectags.h>
 
 /*
  * How often to produce audio.
@@ -77,8 +79,68 @@ static const btstack_sbc_encoder_t * sbc_encoder;
 static btstack_sbc_encoder_bluedroid_t sbc_encoder_state;
 
 static bt_audio_source_t        audio_source;
+static BTAudioRing            * audio_ring;
 
 /* -------------------------------------------------------------------------- */
+
+/*
+ * Open the ring an AHI driver writes into.
+ *
+ * Allocated by the service and handed out, so its lifetime is the service's
+ * rather than any one producer's: a driver that goes away without saying so
+ * leaves nothing dangling, and the next one gets the same ring.
+ */
+BTAudioRing * bt_handler_a2dp_ring_open(void){
+    if (audio_ring == NULL){
+        /* shared, because the producer is another process entirely */
+        audio_ring = AllocVecTags(sizeof(BTAudioRing),
+                                  AVT_Type,            MEMF_SHARED,
+                                  AVT_ClearWithValue,  0,
+                                  TAG_END);
+        if (audio_ring == NULL) return NULL;
+        audio_ring->bar_Magic  = BT_AUDIO_RING_MAGIC;
+        audio_ring->bar_Frames = BT_AUDIO_RING_FRAMES;
+    }
+    audio_ring->bar_Write      = 0;
+    audio_ring->bar_Read       = 0;
+    audio_ring->bar_SampleRate = stream_sample_rate;
+    return audio_ring;
+}
+
+void bt_handler_a2dp_ring_close(void){
+    if (audio_ring == NULL) return;
+    audio_ring->bar_Write = 0;
+    audio_ring->bar_Read  = 0;
+}
+
+/*
+ * Take frames out of the ring.
+ *
+ * Running dry is silence rather than a failure: a producer with nothing to say
+ * is ordinary, and an A2DP sink that stops being fed drops the connection. So
+ * whatever is missing is filled with zeroes by the caller and the stream
+ * carries on.
+ */
+static uint16_t ring_source(int16_t * buffer, uint16_t num_frames){
+    if (audio_ring == NULL) return 0;
+
+    uint32_t write = audio_ring->bar_Write;
+    uint32_t read  = audio_ring->bar_Read;
+    uint32_t available = write - read;      /* unsigned: survives the wrap */
+
+    if (available > BT_AUDIO_RING_FRAMES) available = BT_AUDIO_RING_FRAMES;
+    if (available > num_frames)           available = num_frames;
+
+    uint32_t i;
+    for (i = 0; i < available; i++){
+        uint32_t slot = (read + i) % BT_AUDIO_RING_FRAMES;
+        buffer[i * 2]     = audio_ring->bar_Samples[slot * 2];
+        buffer[i * 2 + 1] = audio_ring->bar_Samples[slot * 2 + 1];
+    }
+    audio_ring->bar_Read = read + available;
+
+    return (uint16_t) available;
+}
 
 void bt_handler_a2dp_set_verbose(bool enabled){
     verbose = enabled;
@@ -125,9 +187,20 @@ static void fill_sbc_buffer(void){
         if (frames_per_sbc > MAX_FRAMES_PER_ROUND) break;
 
         int16_t pcm[MAX_FRAMES_PER_ROUND * 2];
-        bt_audio_source_t source = (audio_source != NULL) ? audio_source : &tone_source;
-
-        uint16_t got = source(pcm, frames_per_sbc);
+        /*
+         * The ring first when a producer is filling it, then an explicit
+         * source, and the tone only when nothing else is playing - so the tone
+         * is what you hear when the chain works and nothing is feeding it,
+         * rather than something that has to be switched off.
+         */
+        uint16_t got;
+        if ((audio_ring != NULL) && (audio_ring->bar_Write != audio_ring->bar_Read)){
+            got = ring_source(pcm, frames_per_sbc);
+        } else if (audio_source != NULL){
+            got = audio_source(pcm, frames_per_sbc);
+        } else {
+            got = tone_source(pcm, frames_per_sbc);
+        }
         if (got < frames_per_sbc){
             /* a source with nothing to say is silence, not a failure */
             memset(&pcm[got * 2], 0, (frames_per_sbc - got) * 2 * sizeof(int16_t));
@@ -238,6 +311,7 @@ static void a2dp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *
                 a2dp_subevent_signaling_media_codec_sbc_configuration_get_max_bitpool_value(packet),
                 (num_channels == 1) ? SBC_CHANNEL_MODE_MONO : SBC_CHANNEL_MODE_JOINT_STEREO);
 
+            if (audio_ring != NULL) audio_ring->bar_SampleRate = stream_sample_rate;
             DebugPrintF("a2dp: codec agreed, %lu Hz, %u channels, bitpool %u\n",
                         (unsigned long) stream_sample_rate,
                         num_channels,

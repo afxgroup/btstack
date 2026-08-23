@@ -1943,6 +1943,24 @@ static bt_result_t handle_command(BTServiceMsg * msg){
             return BT_RESULT_OK;
         }
 
+        case BTCMD_AUDIO_OPEN:
+            /*
+             * Hand back the ring to write PCM into.
+             *
+             * Given out whether or not a sink is connected: an AHI driver is
+             * opened when a program wants to play something, which is not the
+             * same moment as headphones being switched on, and a producer
+             * writing into a ring nobody is reading is harmless - the samples
+             * are simply overwritten.
+             */
+            msg->bsm_AudioRing = bt_handler_a2dp_ring_open();
+            return (msg->bsm_AudioRing != NULL) ? BT_RESULT_OK : BT_RESULT_FAILED;
+
+        case BTCMD_AUDIO_CLOSE:
+            bt_handler_a2dp_ring_close();
+            msg->bsm_AudioRing = NULL;
+            return BT_RESULT_OK;
+
         case BTCMD_GET_FOLDER:
             btstack_strcpy(msg->bsm_Folder, sizeof(msg->bsm_Folder), bt_opp_server_get_folder());
             return BT_RESULT_OK;

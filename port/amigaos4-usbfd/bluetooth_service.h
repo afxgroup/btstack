@@ -26,7 +26,7 @@
 #include <exec/ports.h>
 
 #define BLUETOOTH_SERVICE_PORT_NAME "bluetooth.service"
-#define BLUETOOTH_SERVICE_VERSION   4
+#define BLUETOOTH_SERVICE_VERSION   5
 
 /* how the service was asked to behave with a device */
 typedef enum {
@@ -79,6 +79,10 @@ typedef enum {
     BTCMD_GET_FOLDER,
     BTCMD_SET_FOLDER,
 
+    /* audio: hand the caller the ring to write PCM into */
+    BTCMD_AUDIO_OPEN,
+    BTCMD_AUDIO_CLOSE,
+
     /* device */
     BTCMD_PAIR,
     BTCMD_UNPAIR,
@@ -89,6 +93,41 @@ typedef enum {
     BTCMD_SUBSCRIBE_EVENTS,
     BTCMD_UNSUBSCRIBE_EVENTS,
 } bt_command_t;
+
+/*
+ * The ring an audio producer writes PCM into.
+ *
+ * The producer is an AHI driver in one process and the consumer is the service
+ * in another, so the audio has to cross a process boundary every few
+ * milliseconds. A ring in memory both can see costs nothing per sample; a
+ * message per buffer would cost a message every ten milliseconds and add its
+ * own latency to a path that already has a codec and a radio in it.
+ *
+ * One producer and one consumer, and only they touch their own index - the
+ * writer never reads bar_Read to modify it and the reader never touches
+ * bar_Write - so neither needs a lock. What it does need is that a reader
+ * seeing an advanced bar_Write also sees the samples behind it, which is why
+ * the producer must order the two writes.
+ *
+ * Frames are interleaved 16 bit stereo in host byte order, which is what AHI
+ * mixes and what the SBC encoder wants: on this machine no conversion happens
+ * at all.
+ *
+ * Running dry is silence, not an error. A producer with nothing to say is
+ * normal and the consumer fills the gap rather than stalling the stream, since
+ * an A2DP sink that stops receiving drops the connection.
+ */
+#define BT_AUDIO_RING_MAGIC   0x42544155   /* 'BTAU' */
+#define BT_AUDIO_RING_FRAMES  8192         /* about 185 ms at 44100 */
+
+typedef struct {
+    uint32          bar_Magic;
+    uint32          bar_Frames;      /* capacity, always BT_AUDIO_RING_FRAMES */
+    uint32          bar_SampleRate;  /* what the stream negotiated, 0 if idle */
+    volatile uint32 bar_Write;       /* frame index, only the producer writes */
+    volatile uint32 bar_Read;        /* frame index, only the consumer writes */
+    int16           bar_Samples[BT_AUDIO_RING_FRAMES * 2];
+} BTAudioRing;
 
 typedef enum {
     BT_RESULT_OK = 0,
@@ -129,9 +168,14 @@ typedef struct {
     /* GET_FOLDER fills this in, SET_FOLDER reads it */
     char             bsm_Folder[256];
 
+    /* AUDIO_OPEN fills this in: the ring belongs to the service and stays
+     * valid until AUDIO_CLOSE, or until the service exits */
+    BTAudioRing    * bsm_AudioRing;
+
     /* SUBSCRIBE_EVENTS: where to send BTServiceEvent messages */
     struct MsgPort * bsm_EventPort;
 } BTServiceMsg;
+
 
 /*
  * Sent by the service to subscribers when something changes, so a GUI can show

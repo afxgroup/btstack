@@ -19,6 +19,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "bt_profile_handler.h"
+#include "bluetooth_service.h"
 
 #if defined __cplusplus
 extern "C" {
@@ -44,6 +45,15 @@ void bt_handler_a2dp_set_source(bt_audio_source_t source);
 
 /** @brief Sample rate the stream settled on, 0 when not streaming */
 uint32_t bt_handler_a2dp_sample_rate(void);
+
+/**
+ * @brief The ring an audio producer writes PCM into.
+ *
+ * Allocated by the service and valid for its lifetime, so a producer that
+ * disappears without closing leaves nothing dangling.
+ */
+BTAudioRing * bt_handler_a2dp_ring_open(void);
+void bt_handler_a2dp_ring_close(void);
 
 /** @brief Log the stream setup and each timing correction */
 void bt_handler_a2dp_set_verbose(bool enabled);
