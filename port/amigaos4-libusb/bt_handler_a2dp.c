@@ -215,9 +215,16 @@ static void a2dp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *
     switch (hci_event_a2dp_meta_get_subevent_code(packet)){
 
         case A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_SBC_CONFIGURATION: {
-            uint8_t sampling_frequency_index =
+            /*
+             * The sampling frequency, not the low byte of it.
+             *
+             * This was read into a uint8_t, and 44100 truncated to 68 - which
+             * the log printed as "68 Hz" and which then configured the encoder
+             * and paced the timer. At sixty-eight samples a second there is
+             * nothing to hear, which is exactly what happened.
+             */
+            stream_sample_rate =
                 a2dp_subevent_signaling_media_codec_sbc_configuration_get_sampling_frequency(packet);
-            stream_sample_rate = sampling_frequency_index;
 
             uint8_t num_channels =
                 a2dp_subevent_signaling_media_codec_sbc_configuration_get_num_channels(packet);
@@ -237,6 +244,18 @@ static void a2dp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *
                         a2dp_subevent_signaling_media_codec_sbc_configuration_get_max_bitpool_value(packet));
             break;
         }
+
+        case A2DP_SUBEVENT_SIGNALING_CONNECTION_ESTABLISHED:
+            /*
+             * Keep the connection handle.
+             *
+             * Without it the service is told the device is in use with an
+             * invalid handle, decides it is therefore not connected, and pages
+             * it every few seconds - a page at a device that is streaming to us
+             * takes the radio away from the very stream it is checking on.
+             */
+            a2dp_con_handle = a2dp_subevent_signaling_connection_established_get_con_handle(packet);
+            break;
 
         case A2DP_SUBEVENT_STREAM_ESTABLISHED: {
             uint8_t status = a2dp_subevent_stream_established_get_status(packet);
