@@ -199,6 +199,28 @@ straight in. The built-in text is the fallback handed to `GetCatalogStr()`, so
 everything reads correctly with no catalog installed, with one that does not
 cover a string, or with no locale.library at all.
 
+## Sending audio to headphones and speakers
+
+A2DP Source: the Amiga is the source, the headphones or speaker are the sink.
+Pair one from the GUI as with anything else and it plays. Audio is encoded to
+SBC, which every A2DP device has to accept.
+
+Where the samples come from is behind one function, `bt_handler_a2dp_set_source()`,
+and a tone is built in. It is not music: it exists so the chain could be proved
+before anything depended on it - connection, codec negotiation, encoding, pacing
+and the sink's own buffering - and a steady tone makes a dropout obvious where
+silence would not.
+
+Two things about the pacing, since A2DP has no flow control worth the name and
+the sender is responsible for the rate. Audio is produced for the time that
+actually elapsed rather than the timer's nominal period, because a run loop
+that was busy elsewhere hands it a longer gap; and the remainder of the division
+is carried rather than dropped, which is what stops 44100 becoming 44000 over an
+hour.
+
+Only devices whose minor class can actually play are offered a connection. Major
+class 4 is Audio/Video and a camcorder lives there too.
+
 ## Receiving files
 
 Object Push is offered over both RFCOMM and L2CAP. A 9 MB file arrives in about
