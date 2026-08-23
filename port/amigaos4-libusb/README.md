@@ -199,28 +199,39 @@ straight in. The built-in text is the fallback handed to `GetCatalogStr()`, so
 everything reads correctly with no catalog installed, with one that does not
 cover a string, or with no locale.library at all.
 
-## Receiving files, and why they arrive slowly
+## Receiving files
 
-Object Push is offered over RFCOMM, which is GOEP 1.1, and a transfer runs at
-about 17 kB/s - roughly seventeen packets a second of 1016 bytes each.
+Object Push is offered over both RFCOMM and L2CAP. A 9 MB file arrives in about
+a hundred seconds - roughly 87 kB/s - and getting there took four things, each
+of which was worth a fifth or more.
 
-That is not a bandwidth limit, it is a waiting one. Single Response Mode lets a
-sender stream instead of waiting for a response to every packet, and SRM is a
-GOEP 2.0 feature: GOEP 2.0 is OBEX over L2CAP. Over RFCOMM the sender never asks
-for it, so every packet costs a round trip.
+**The L2CAP bearer has to open.** GOEP 2.0 is OBEX over L2CAP, and Single
+Response Mode is a GOEP 2.0 feature: over RFCOMM the sender never asks for it,
+waits for a response to every packet, and a transfer runs at 17 kB/s. That is
+the single biggest factor.
 
-The L2CAP bearer was tried and does not negotiate here. BTstack's GOEP server
-sets `ertm_mandatory` in its L2CAP configuration, so a peer that will not agree
-to Enhanced Retransmission Mode on that PSM leaves it no choice but to close the
-channel - which the sender reports as the connection being reset. Enlarging
-`GOEP_SERVER_ERTM_BUFFER` does not help and cannot: l2cap derives the MPS from
-it, so the layout that has to fit grows with the room it is given.
+**ERTM cannot be mandatory.** BTstack's GOEP server sets `ertm_mandatory`, and
+l2cap then closes the channel the moment a peer's configure request arrives with
+no Retransmission and Flow Control option - which is how Basic Mode is proposed,
+and what Linux proposes here. The sender sees the connection reset.
+`GOEP_SERVER_ERTM_MANDATORY` is 0 in `btstack_config.h` for that reason. The
+mode does not decide the speed: SRM is negotiated in OBEX headers, so a Basic
+Mode channel that opens beats an ERTM channel that does not.
 
-Advertising a bearer that gets chosen in preference and then fails is worse than
-not offering it, so only RFCOMM is advertised. Anyone wanting to take this
-further should start from a packet log: the L2CAP configure request from the far
-end says what mode it is proposing, and that is the fact everything else turns
-on.
+**The radio has to be left alone.** Paging a sleeping keyboard costs a five
+second page timeout each time, and the LE scan runs a quarter of the time
+permanently. Both were happening throughout every transfer, and both are now
+suspended while one is running. Together they were about a third of the
+throughput.
+
+**Enough reads in flight.** With one ACL read outstanding the controller has
+nowhere to put the next packet until the last has been processed, so throughput
+becomes one packet per round trip. There are sixteen.
+
+If it ever needs looking at again, the numbers to reach for are in the log at
+the end of each transfer - bytes, packets, elapsed time - and `-l FILE` writes a
+packet log that shows the L2CAP configuration exchange, which is where three
+different wrong guesses were finally settled.
 
 ## Bluetooth Classic keyboards
 
