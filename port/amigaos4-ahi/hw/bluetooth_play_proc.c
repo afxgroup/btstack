@@ -66,6 +66,16 @@ static uint32 ring_used(BTAudioRing * ring){
 }
 
 /*
+ * Apply the master volume AHI set through AHIsub_HardwareControl. Fixed
+ * arithmetic: 0x10000 is unity, and that case is left alone so the ordinary
+ * path stays a plain copy.
+ */
+static inline int16 scale(int16 sample, Fixed vol){
+    if (vol == 0x10000) return sample;
+    return (int16) (((int32) sample * (int32) vol) >> 16);
+}
+
+/*
  * One mix cycle into the ring.
  *
  * Returns how many frames were written, which is zero when there was no room -
@@ -89,6 +99,12 @@ static uint32 mix_into_ring(struct BluetoothAudioData * dd){
     uint32 write = ring->bar_Write;
     uint32 i;
 
+    /*
+     * The master volume AHI handed us through AHIsub_HardwareControl. It is
+     * Fixed, so 0x10000 is unity and the common case costs nothing.
+     */
+    Fixed vol = dd->ba_OutputVolume;
+
     if (AudioCtrl->ahiac_Flags & AHIACF_HIFI){
         /*
          * HiFi mixing is 32 bit; the ring is 16. Taking the top half is what
@@ -98,13 +114,13 @@ static uint32 mix_into_ring(struct BluetoothAudioData * dd){
         if (AudioCtrl->ahiac_Flags & AHIACF_STEREO){
             for (i = 0; i < frames; i++){
                 uint32 slot = (write + i) % BT_AUDIO_RING_FRAMES;
-                ring->bar_Samples[slot * 2]     = (int16) (src[i * 2]     >> 16);
-                ring->bar_Samples[slot * 2 + 1] = (int16) (src[i * 2 + 1] >> 16);
+                ring->bar_Samples[slot * 2]     = scale((int16) (src[i * 2]     >> 16), vol);
+                ring->bar_Samples[slot * 2 + 1] = scale((int16) (src[i * 2 + 1] >> 16), vol);
             }
         } else {
             for (i = 0; i < frames; i++){
                 uint32 slot = (write + i) % BT_AUDIO_RING_FRAMES;
-                int16 sample = (int16) (src[i] >> 16);
+                int16 sample = scale((int16) (src[i] >> 16), vol);
                 ring->bar_Samples[slot * 2]     = sample;
                 ring->bar_Samples[slot * 2 + 1] = sample;   /* mono goes to both */
             }
@@ -114,14 +130,15 @@ static uint32 mix_into_ring(struct BluetoothAudioData * dd){
         if (AudioCtrl->ahiac_Flags & AHIACF_STEREO){
             for (i = 0; i < frames; i++){
                 uint32 slot = (write + i) % BT_AUDIO_RING_FRAMES;
-                ring->bar_Samples[slot * 2]     = src[i * 2];
-                ring->bar_Samples[slot * 2 + 1] = src[i * 2 + 1];
+                ring->bar_Samples[slot * 2]     = scale(src[i * 2],     vol);
+                ring->bar_Samples[slot * 2 + 1] = scale(src[i * 2 + 1], vol);
             }
         } else {
             for (i = 0; i < frames; i++){
                 uint32 slot = (write + i) % BT_AUDIO_RING_FRAMES;
-                ring->bar_Samples[slot * 2]     = src[i];
-                ring->bar_Samples[slot * 2 + 1] = src[i];
+                int16 sample = scale(src[i], vol);
+                ring->bar_Samples[slot * 2]     = sample;
+                ring->bar_Samples[slot * 2 + 1] = sample;
             }
         }
     }

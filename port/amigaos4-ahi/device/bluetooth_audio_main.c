@@ -19,6 +19,13 @@
 
 #include <string.h>
 
+/*
+ * No libc here: the library is linked -nostartfiles, the newlib CRT never runs
+ * and INewlib stays NULL, so a call to memset would jump through a null
+ * interface and take down ahi.device's unit process. exec and utility provide
+ * the equivalents, and they are already open.
+ */
+
 extern struct ExecIFace    * IExec;
 extern struct DOSIFace     * IDOS;
 extern struct UtilityIFace * IUtility;
@@ -57,7 +64,7 @@ BTAudioRing * bluetooth_audio_ring_open(void){
     if (reply == NULL) return NULL;
 
     BTServiceMsg msg;
-    memset(&msg, 0, sizeof(msg));
+    IUtility->ClearMem(&msg, sizeof(msg));
     msg.bsm_Message.mn_Node.ln_Type = NT_MESSAGE;
     msg.bsm_Message.mn_Length       = sizeof(msg);
     msg.bsm_Message.mn_ReplyPort    = reply;
@@ -89,7 +96,7 @@ void bluetooth_audio_ring_close(void){
     if (reply == NULL) return;
 
     BTServiceMsg msg;
-    memset(&msg, 0, sizeof(msg));
+    IUtility->ClearMem(&msg, sizeof(msg));
     msg.bsm_Message.mn_Node.ln_Type = NT_MESSAGE;
     msg.bsm_Message.mn_Length       = sizeof(msg);
     msg.bsm_Message.mn_ReplyPort    = reply;
@@ -114,11 +121,37 @@ void bluetooth_audio_ring_close(void){
 
 /* -------------------------------------------------------------------------- */
 
-uint32 VARARGS68K _btaudio_AHIsub_AllocAudio(struct BluetoothAudioIFace * Self,
+/*
+ * Trace to serial. AHI reports nothing when it declines a driver, so the only
+ * way to tell which call it stops at is to have every entry point say so.
+ */
+#define BTA_LOG(...) IExec->DebugPrintF("[bluetooth.audio] " __VA_ARGS__)
+
+uint32 _btaudio_AHIsub_AllocAudio(struct BluetoothAudioIFace * Self,
                                              struct TagItem * tagList,
                                              struct AHIAudioCtrlDrv * AudioCtrl){
     (void) Self;
     (void) tagList;
+
+    /*
+     * What AHI is asking for. It decides whether the driver is usable inside
+     * AHI_AllocAudioA, after this returns, and says nothing when it declines -
+     * so the request itself is the only evidence of what it disliked.
+     */
+    BTA_LOG("AHIsub_AllocAudio: mixfreq %lu ch %u snd %u flags 0x%lx\n",
+            (unsigned long) AudioCtrl->ahiac_MixFreq,
+            (unsigned) AudioCtrl->ahiac_Channels,
+            (unsigned) AudioCtrl->ahiac_Sounds,
+            (unsigned long) AudioCtrl->ahiac_Flags);
+    BTA_LOG("  playerfreq %ld (min %ld max %ld) bufftype 0x%lx buffsize %lu\n",
+            (long) AudioCtrl->ahiac_PlayerFreq,
+            (long) AudioCtrl->ahiac_MinPlayerFreq,
+            (long) AudioCtrl->ahiac_MaxPlayerFreq,
+            (unsigned long) AudioCtrl->ahiac_BuffType,
+            (unsigned long) AudioCtrl->ahiac_BuffSize);
+    BTA_LOG("  playerfunc %p mixerfunc %p\n",
+            (void *) AudioCtrl->ahiac_PlayerFunc,
+            (void *) AudioCtrl->ahiac_MixerFunc);
 
     struct BluetoothAudioData * dd =
         IExec->AllocVecTags(sizeof(struct BluetoothAudioData),
@@ -127,7 +160,25 @@ uint32 VARARGS68K _btaudio_AHIsub_AllocAudio(struct BluetoothAudioIFace * Self,
                             TAG_END);
     if (dd == NULL) return AHISF_ERROR;
 
+    /*
+     * The autodocs require the driver to move ahiac_MixFreq to the nearest rate
+     * it can actually play. There is only one: the encoder is fixed at 44100
+     * and the sink agreed to it. Accepting whatever AHI asked for would mix at
+     * one rate and play at another, which is wrong pitch rather than an error.
+     */
+    if (AudioCtrl->ahiac_MixFreq != BT_AUDIO_FREQUENCY){
+        BTA_LOG("snapping mixfreq %lu -> %lu\n",
+                (unsigned long) AudioCtrl->ahiac_MixFreq,
+                (unsigned long) BT_AUDIO_FREQUENCY);
+        AudioCtrl->ahiac_MixFreq = BT_AUDIO_FREQUENCY;
+    }
+
+    BTA_LOG("AllocAudio: storing dd %p in AudioCtrl %p\n", (void *) dd, (void *) AudioCtrl);
+
     dd->AudioCtrl              = AudioCtrl;
+    dd->ba_OutputVolume        = 0x10000;   /* unity until AHI says otherwise */
+    dd->ba_MonitorVolume       = 0x00000;
+    dd->ba_InputGain           = 0x10000;
     AudioCtrl->ahiac_DriverData = dd;
 
     /*
@@ -136,12 +187,14 @@ uint32 VARARGS68K _btaudio_AHIsub_AllocAudio(struct BluetoothAudioIFace * Self,
      * play process fills it to match. AHISF_MIXING says AHI should do the
      * mixing, which is the whole point of using its mixer.
      */
-    return AHISF_MIXING | AHISF_TIMING | AHISF_KNOWSTEREO;
+    return AHISF_MIXING | AHISF_TIMING | AHISF_KNOWSTEREO | AHISF_KNOWHIFI;
 }
 
-void VARARGS68K _btaudio_AHIsub_FreeAudio(struct BluetoothAudioIFace * Self,
+void _btaudio_AHIsub_FreeAudio(struct BluetoothAudioIFace * Self,
                                           struct AHIAudioCtrlDrv * AudioCtrl){
     (void) Self;
+
+    BTA_LOG("AHIsub_FreeAudio\n");
 
     struct BluetoothAudioData * dd = (struct BluetoothAudioData *) AudioCtrl->ahiac_DriverData;
     if (dd == NULL) return;
@@ -150,18 +203,26 @@ void VARARGS68K _btaudio_AHIsub_FreeAudio(struct BluetoothAudioIFace * Self,
     AudioCtrl->ahiac_DriverData = NULL;
 }
 
-uint32 VARARGS68K _btaudio_AHIsub_Start(struct BluetoothAudioIFace * Self, uint32 Flags,
+uint32 _btaudio_AHIsub_Start(struct BluetoothAudioIFace * Self, uint32 Flags,
                                         struct AHIAudioCtrlDrv * AudioCtrl){
     (void) Self;
 
     struct BluetoothAudioData * dd = (struct BluetoothAudioData *) AudioCtrl->ahiac_DriverData;
+
+    /* Trace first, and unconditionally: an entry point that reports only after
+     * its guards cannot show a call that the guards reject. */
+    BTA_LOG("AHIsub_Start, flags 0x%lx, dd %p\n", (unsigned long) Flags, (void *) dd);
+
     if (dd == NULL) return AHISF_ERROR;
 
     /* recording is the other half of the audio work and is not this driver */
     if ((Flags & AHISF_PLAY) == 0) return AHISF_ERROR;
 
     dd->ba_Ring = bluetooth_audio_ring_open();
-    if (dd->ba_Ring == NULL) return AHISF_ERROR;
+    if (dd->ba_Ring == NULL){
+        BTA_LOG("no ring: is BluetoothService running?\n");
+        return AHISF_ERROR;
+    }
 
     dd->ba_MixBuffer = IExec->AllocVecTags(AudioCtrl->ahiac_BuffSize,
                                            AVT_Type,           MEMF_SHARED,
@@ -210,9 +271,13 @@ uint32 VARARGS68K _btaudio_AHIsub_Start(struct BluetoothAudioIFace * Self, uint3
     return 0;
 }
 
-uint32 VARARGS68K _btaudio_AHIsub_Stop(struct BluetoothAudioIFace * Self, uint32 Flags,
+uint32 _btaudio_AHIsub_Stop(struct BluetoothAudioIFace * Self, uint32 Flags,
                                        struct AHIAudioCtrlDrv * AudioCtrl){
     (void) Self;
+
+    BTA_LOG("AHIsub_Stop, flags 0x%lx, ctrl %p dd %p\n", (unsigned long) Flags,
+            (void *) AudioCtrl,
+            (void *) ((AudioCtrl != NULL) ? AudioCtrl->ahiac_DriverData : NULL));
     (void) Flags;
 
     struct BluetoothAudioData * dd = (struct BluetoothAudioData *) AudioCtrl->ahiac_DriverData;
@@ -240,88 +305,147 @@ uint32 VARARGS68K _btaudio_AHIsub_Stop(struct BluetoothAudioIFace * Self, uint32
     return 0;
 }
 
-uint32 VARARGS68K _btaudio_AHIsub_Update(struct BluetoothAudioIFace * Self, uint32 Flags,
+uint32 _btaudio_AHIsub_Update(struct BluetoothAudioIFace * Self, uint32 Flags,
                                          struct AHIAudioCtrlDrv * AudioCtrl){
-    (void) Self; (void) Flags; (void) AudioCtrl;
+    (void) Self;
+
+    BTA_LOG("AHIsub_Update\n"); (void) Flags; (void) AudioCtrl;
     return 0;
 }
 
-void VARARGS68K _btaudio_AHIsub_Disable(struct BluetoothAudioIFace * Self,
+void _btaudio_AHIsub_Disable(struct BluetoothAudioIFace * Self,
                                         struct AHIAudioCtrlDrv * AudioCtrl){
-    (void) Self; (void) AudioCtrl;
+    (void) Self;
+
+    BTA_LOG("AHIsub_Disable\n"); (void) AudioCtrl;
     IExec->Forbid();
 }
 
-void VARARGS68K _btaudio_AHIsub_Enable(struct BluetoothAudioIFace * Self,
+void _btaudio_AHIsub_Enable(struct BluetoothAudioIFace * Self,
                                        struct AHIAudioCtrlDrv * AudioCtrl){
-    (void) Self; (void) AudioCtrl;
+    (void) Self;
+
+    BTA_LOG("AHIsub_Enable\n"); (void) AudioCtrl;
     IExec->Permit();
 }
 
+/*
+ * SetVol, SetFreq, SetSound, SetEffect, LoadSound and UnloadSound.
+ *
+ * A driver that sets AHISB_MIXING gets these first, and ahi.device only handles
+ * them itself if the driver answers AHIS_UNKNOWN. Any other answer claims the
+ * work - so returning an error code here does not report a failure, it asserts
+ * that the driver took care of it. This driver does none of it: AHI mixes.
+ */
 /*
  * The channel calls belong to a driver that mixes in hardware. AHI does the
  * mixing here, so it never asks - and answering "not supported" is the correct
  * answer rather than a gap.
  */
-uint32 VARARGS68K _btaudio_AHIsub_SetVol(struct BluetoothAudioIFace * Self, uint16 Channel,
+uint32 _btaudio_AHIsub_SetVol(struct BluetoothAudioIFace * Self, uint16 Channel,
                                          Fixed Volume, sposition Pan,
                                          struct AHIAudioCtrlDrv * AudioCtrl, uint32 Flags){
     (void) Self; (void) Channel; (void) Volume; (void) Pan; (void) AudioCtrl; (void) Flags;
-    return AHISF_ERROR;
+    return AHIS_UNKNOWN;
 }
 
-uint32 VARARGS68K _btaudio_AHIsub_SetFreq(struct BluetoothAudioIFace * Self, uint16 Channel,
+uint32 _btaudio_AHIsub_SetFreq(struct BluetoothAudioIFace * Self, uint16 Channel,
                                           uint32 Freq, struct AHIAudioCtrlDrv * AudioCtrl,
                                           uint32 Flags){
     (void) Self; (void) Channel; (void) Freq; (void) AudioCtrl; (void) Flags;
-    return AHISF_ERROR;
+    return AHIS_UNKNOWN;
 }
 
-uint32 VARARGS68K _btaudio_AHIsub_SetSound(struct BluetoothAudioIFace * Self, uint16 Channel,
+uint32 _btaudio_AHIsub_SetSound(struct BluetoothAudioIFace * Self, uint16 Channel,
                                            uint16 Sound, uint32 Offset, int32 Length,
                                            struct AHIAudioCtrlDrv * AudioCtrl, uint32 Flags){
     (void) Self; (void) Channel; (void) Sound; (void) Offset; (void) Length;
     (void) AudioCtrl; (void) Flags;
-    return AHISF_ERROR;
+    return AHIS_UNKNOWN;
 }
 
-uint32 VARARGS68K _btaudio_AHIsub_SetEffect(struct BluetoothAudioIFace * Self, APTR Effect,
+uint32 _btaudio_AHIsub_SetEffect(struct BluetoothAudioIFace * Self, APTR Effect,
                                             struct AHIAudioCtrlDrv * AudioCtrl){
     (void) Self; (void) Effect; (void) AudioCtrl;
-    return AHISF_ERROR;
+    return AHIS_UNKNOWN;
 }
 
-uint32 VARARGS68K _btaudio_AHIsub_LoadSound(struct BluetoothAudioIFace * Self, uint16 Sound,
+uint32 _btaudio_AHIsub_LoadSound(struct BluetoothAudioIFace * Self, uint16 Sound,
                                             uint32 Type, APTR Info,
                                             struct AHIAudioCtrlDrv * AudioCtrl){
     (void) Self; (void) Sound; (void) Type; (void) Info; (void) AudioCtrl;
-    return AHISF_ERROR;
+    return AHIS_UNKNOWN;
 }
 
-uint32 VARARGS68K _btaudio_AHIsub_UnloadSound(struct BluetoothAudioIFace * Self, uint16 Sound,
+uint32 _btaudio_AHIsub_UnloadSound(struct BluetoothAudioIFace * Self, uint16 Sound,
                                               struct AHIAudioCtrlDrv * AudioCtrl){
     (void) Self; (void) Sound; (void) AudioCtrl;
-    return AHISF_ERROR;
+    return AHIS_UNKNOWN;
 }
 
-int32 VARARGS68K _btaudio_AHIsub_HardwareControl(struct BluetoothAudioIFace * Self,
+int32 _btaudio_AHIsub_HardwareControl(struct BluetoothAudioIFace * Self,
                                                  uint32 Attribute, int32 Argument,
                                                  struct AHIAudioCtrlDrv * AudioCtrl){
-    (void) Self; (void) Attribute; (void) Argument; (void) AudioCtrl;
-    return 0;
+    (void) Self;
+
+    struct BluetoothAudioData * dd =
+        (AudioCtrl != NULL) ? (struct BluetoothAudioData *) AudioCtrl->ahiac_DriverData : NULL;
+
+    BTA_LOG("AHIsub_HardwareControl 0x%lx (arg %ld)\n",
+            (unsigned long) Attribute, (long) Argument);
+
+    if (dd == NULL) return FALSE;
+
+    /*
+     * A set answers TRUE, a query answers the value. Answering FALSE to a set
+     * tells AHI the control failed, and AHI then gives up on the driver
+     * altogether - which is why every one of these has to be handled, even the
+     * ones that have nothing behind them.
+     */
+    switch (Attribute){
+        case AHIC_MixFreq_Query:        return (int32) AudioCtrl->ahiac_MixFreq;
+
+        case AHIC_OutputVolume:         dd->ba_OutputVolume  = (Fixed) Argument; return TRUE;
+        case AHIC_OutputVolume_Query:   return (int32) dd->ba_OutputVolume;
+
+        case AHIC_MonitorVolume:        dd->ba_MonitorVolume = (Fixed) Argument; return TRUE;
+        case AHIC_MonitorVolume_Query:  return (int32) dd->ba_MonitorVolume;
+
+        case AHIC_InputGain:            dd->ba_InputGain     = (Fixed) Argument; return TRUE;
+        case AHIC_InputGain_Query:      return (int32) dd->ba_InputGain;
+
+        case AHIC_Input:                dd->ba_Input  = (ULONG) Argument; return TRUE;
+        case AHIC_Input_Query:          return (int32) dd->ba_Input;
+
+        case AHIC_Output:               dd->ba_Output = (ULONG) Argument; return TRUE;
+        case AHIC_Output_Query:         return (int32) dd->ba_Output;
+
+        default:                        return FALSE;
+    }
 }
 
-int32 VARARGS68K _btaudio_AHIsub_GetAttr(struct BluetoothAudioIFace * Self, uint32 Attribute,
+int32 _btaudio_AHIsub_GetAttr(struct BluetoothAudioIFace * Self, uint32 Attribute,
                                          int32 Argument, int32 DefValue,
                                          struct TagItem * tagList,
                                          struct AHIAudioCtrlDrv * AudioCtrl){
     (void) Self; (void) tagList; (void) AudioCtrl;
 
+    BTA_LOG("AHIsub_GetAttr 0x%lx (arg %ld)\n",
+            (unsigned long) Attribute, (long) Argument);
+
     switch (Attribute){
         case AHIDB_Bits:            return 16;
+
+        /*
+         * One frequency only: the SBC encoder is configured for 44100 and the
+         * sink agreed to it, so there is nothing to choose between.
+         */
         case AHIDB_Frequencies:     return 1;
+        case AHIDB_MinMixFreq:      return BT_AUDIO_FREQUENCY;
+        case AHIDB_MaxMixFreq:      return BT_AUDIO_FREQUENCY;
         case AHIDB_Frequency:       return BT_AUDIO_FREQUENCY;
         case AHIDB_Index:           return 0;    /* one frequency, so always it */
+        case AHIDB_Annotation:      return (int32) "A2DP audio over Bluetooth";
         case AHIDB_Author:          return (int32) "Andrea Palmate";
         case AHIDB_Copyright:       return (int32) "GPL";
         case AHIDB_Version:         return (int32) VSTRING;
@@ -329,11 +453,29 @@ int32 VARARGS68K _btaudio_AHIsub_GetAttr(struct BluetoothAudioIFace * Self, uint
         case AHIDB_FullDuplex:      return FALSE;
         case AHIDB_Realtime:        return TRUE;
         case AHIDB_MaxPlaySamples:  return BT_MAX_PLAY_SAMPLES;
-        case AHIDB_MaxChannels:     return 2;
+        case AHIDB_MaxChannels:     return DefValue;   /* AHI mixes: its call */
         case AHIDB_Stereo:          return TRUE;
         case AHIDB_Panning:         return TRUE;
         case AHIDB_Volume:          return TRUE;
         case AHIDB_HiFi:            return TRUE;
+        case AHIDB_MultiChannel:    return FALSE;
+
+        /*
+         * Outputs must be at least one. AHI reads the count first and then asks
+         * for each name as a string, so leaving either to DefValue hands it a
+         * zero where it expects a pointer.
+         */
+        case AHIDB_Outputs:         return 1;
+        case AHIDB_Output:          return (int32) "Bluetooth";
+        case AHIDB_Inputs:          return 0;    /* playback only, for now */
+
+        /* Volume ranges are Fixed: 0x10000 is unity gain. */
+        case AHIDB_MinOutputVolume:  return 0x00000;
+        case AHIDB_MaxOutputVolume:  return 0x10000;
+        case AHIDB_MinMonitorVolume: return 0x00000;
+        case AHIDB_MaxMonitorVolume: return 0x00000;   /* nothing to monitor */
+        case AHIDB_MinInputGain:     return 0x10000;
+        case AHIDB_MaxInputGain:     return 0x10000;
         default:
             (void) Argument;
             return DefValue;

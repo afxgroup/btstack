@@ -21,24 +21,24 @@
 
 struct BluetoothAudioIFace;
 
-extern uint32 VARARGS68K _btaudio_Obtain(struct BluetoothAudioIFace *);
-extern uint32 VARARGS68K _btaudio_Release(struct BluetoothAudioIFace *);
-extern struct BluetoothAudioIFace * VARARGS68K _btaudio_Clone(struct BluetoothAudioIFace *);
-extern uint32 VARARGS68K _btaudio_AHIsub_AllocAudio(struct BluetoothAudioIFace *, struct TagItem *tagList, struct AHIAudioCtrlDrv *AudioCtrl);
-extern void   VARARGS68K _btaudio_AHIsub_FreeAudio(struct BluetoothAudioIFace *, struct AHIAudioCtrlDrv *AudioCtrl);
-extern void   VARARGS68K _btaudio_AHIsub_Disable(struct BluetoothAudioIFace *, struct AHIAudioCtrlDrv *AudioCtrl);
-extern void   VARARGS68K _btaudio_AHIsub_Enable(struct BluetoothAudioIFace *, struct AHIAudioCtrlDrv *AudioCtrl);
-extern uint32 VARARGS68K _btaudio_AHIsub_Start(struct BluetoothAudioIFace *, uint32 Flags, struct AHIAudioCtrlDrv *AudioCtrl);
-extern uint32 VARARGS68K _btaudio_AHIsub_Update(struct BluetoothAudioIFace *, uint32 Flags, struct AHIAudioCtrlDrv *AudioCtrl);
-extern uint32 VARARGS68K _btaudio_AHIsub_Stop(struct BluetoothAudioIFace *, uint32 Flags, struct AHIAudioCtrlDrv *AudioCtrl);
-extern uint32 VARARGS68K _btaudio_AHIsub_SetVol(struct BluetoothAudioIFace *, uint16 Channel, Fixed Volume, sposition Pan, struct AHIAudioCtrlDrv *AudioCtrl, uint32 Flags);
-extern uint32 VARARGS68K _btaudio_AHIsub_SetFreq(struct BluetoothAudioIFace *, uint16 Channel, uint32 Freq, struct AHIAudioCtrlDrv *AudioCtrl, uint32 Flags);
-extern uint32 VARARGS68K _btaudio_AHIsub_SetSound(struct BluetoothAudioIFace *, uint16 Channel, uint16 Sound, uint32 Offset, int32 Length, struct AHIAudioCtrlDrv *AudioCtrl, uint32 Flags);
-extern uint32 VARARGS68K _btaudio_AHIsub_SetEffect(struct BluetoothAudioIFace *, APTR Effect, struct AHIAudioCtrlDrv *AudioCtrl);
-extern uint32 VARARGS68K _btaudio_AHIsub_LoadSound(struct BluetoothAudioIFace *, uint16 Sound, uint32 Type, APTR Info, struct AHIAudioCtrlDrv *AudioCtrl);
-extern uint32 VARARGS68K _btaudio_AHIsub_UnloadSound(struct BluetoothAudioIFace *, uint16 Sound, struct AHIAudioCtrlDrv *AudioCtrl);
-extern int32  VARARGS68K _btaudio_AHIsub_GetAttr(struct BluetoothAudioIFace *, uint32 Attribute, int32 Argument, int32 DefValue, struct TagItem *tagList, struct AHIAudioCtrlDrv *AudioCtrl);
-extern int32  VARARGS68K _btaudio_AHIsub_HardwareControl(struct BluetoothAudioIFace *, uint32 Attribute, int32 Argument, struct AHIAudioCtrlDrv *AudioCtrl);
+extern uint32 _btaudio_Obtain(struct BluetoothAudioIFace *);
+extern uint32 _btaudio_Release(struct BluetoothAudioIFace *);
+extern struct BluetoothAudioIFace * _btaudio_Clone(struct BluetoothAudioIFace *);
+extern uint32 _btaudio_AHIsub_AllocAudio(struct BluetoothAudioIFace *, struct TagItem *tagList, struct AHIAudioCtrlDrv *AudioCtrl);
+extern void   _btaudio_AHIsub_FreeAudio(struct BluetoothAudioIFace *, struct AHIAudioCtrlDrv *AudioCtrl);
+extern void   _btaudio_AHIsub_Disable(struct BluetoothAudioIFace *, struct AHIAudioCtrlDrv *AudioCtrl);
+extern void   _btaudio_AHIsub_Enable(struct BluetoothAudioIFace *, struct AHIAudioCtrlDrv *AudioCtrl);
+extern uint32 _btaudio_AHIsub_Start(struct BluetoothAudioIFace *, uint32 Flags, struct AHIAudioCtrlDrv *AudioCtrl);
+extern uint32 _btaudio_AHIsub_Update(struct BluetoothAudioIFace *, uint32 Flags, struct AHIAudioCtrlDrv *AudioCtrl);
+extern uint32 _btaudio_AHIsub_Stop(struct BluetoothAudioIFace *, uint32 Flags, struct AHIAudioCtrlDrv *AudioCtrl);
+extern uint32 _btaudio_AHIsub_SetVol(struct BluetoothAudioIFace *, uint16 Channel, Fixed Volume, sposition Pan, struct AHIAudioCtrlDrv *AudioCtrl, uint32 Flags);
+extern uint32 _btaudio_AHIsub_SetFreq(struct BluetoothAudioIFace *, uint16 Channel, uint32 Freq, struct AHIAudioCtrlDrv *AudioCtrl, uint32 Flags);
+extern uint32 _btaudio_AHIsub_SetSound(struct BluetoothAudioIFace *, uint16 Channel, uint16 Sound, uint32 Offset, int32 Length, struct AHIAudioCtrlDrv *AudioCtrl, uint32 Flags);
+extern uint32 _btaudio_AHIsub_SetEffect(struct BluetoothAudioIFace *, APTR Effect, struct AHIAudioCtrlDrv *AudioCtrl);
+extern uint32 _btaudio_AHIsub_LoadSound(struct BluetoothAudioIFace *, uint16 Sound, uint32 Type, APTR Info, struct AHIAudioCtrlDrv *AudioCtrl);
+extern uint32 _btaudio_AHIsub_UnloadSound(struct BluetoothAudioIFace *, uint16 Sound, struct AHIAudioCtrlDrv *AudioCtrl);
+extern int32  _btaudio_AHIsub_GetAttr(struct BluetoothAudioIFace *, uint32 Attribute, int32 Argument, int32 DefValue, struct TagItem *tagList, struct AHIAudioCtrlDrv *AudioCtrl);
+extern int32  _btaudio_AHIsub_HardwareControl(struct BluetoothAudioIFace *, uint32 Attribute, int32 Argument, struct AHIAudioCtrlDrv *AudioCtrl);
 
 STATIC CONST APTR main_vectors[] =
 {

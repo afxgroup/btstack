@@ -53,6 +53,18 @@ struct BluetoothAudioData
 
     APTR             ba_MixBuffer;   /* AHI mixes here */
     BTAudioRing    * ba_Ring;        /* and it ends up here */
+
+    /*
+     * Hardware controls. AHI sets these right after allocating and treats a
+     * refusal as the driver being unusable, so they are held even where there
+     * is nothing behind them: the sink has no monitoring path and no input.
+     * Volumes are Fixed, 0x10000 being unity gain.
+     */
+    Fixed            ba_OutputVolume;
+    Fixed            ba_MonitorVolume;
+    Fixed            ba_InputGain;
+    ULONG            ba_Input;
+    ULONG            ba_Output;
 };
 
 /* the play process, in hw/ */

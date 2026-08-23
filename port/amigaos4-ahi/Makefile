@@ -21,7 +21,11 @@ OPTIMIZE = -O2
 # Uncomment for a build that writes its diagnostics to the serial console.
 #DEBUG  = -gstabs -DDEBUG
 
-CFLAGS = -mcrt=$(CRT) -mstrict-align -Wall -Wwrite-strings $(DEBUG) $(OPTIMIZE) $(INCPATH)
+# -ffreestanding and -fno-tree-loop-distribute-patterns: no CRT runs here, so
+# INewlib is NULL and any call into libc faults. Memory work goes through
+# IUtility->ClearMem and IExec->CopyMem, and these flags stop the compiler
+# turning ordinary loops into the libc calls we are avoiding.
+CFLAGS = -mcrt=$(CRT) -mstrict-align -ffreestanding -fno-tree-loop-distribute-patterns -Wall -Wwrite-strings $(DEBUG) $(OPTIMIZE) $(INCPATH)
 LINK   = -mcrt=$(CRT) -nostartfiles
 
 TARGET   = bluetooth.audio

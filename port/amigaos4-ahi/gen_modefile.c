@@ -45,7 +45,7 @@
  * mode: A2DP is stereo 16 bit at 44100 and offering variations that would be
  * silently resampled would be a promise we do not keep.
  */
-#define BLUETOOTH_MODE_ID  0x00BB0000UL
+#define BLUETOOTH_MODE_ID  0x00BB0001UL
 #define DRIVER_NAME        "bluetooth"
 #define MODE_NAME          "Bluetooth: A2DP"
 

@@ -34,21 +34,30 @@ struct Interface * INewlib;
 
 STATIC CONST TEXT USED verstag[] = VERSTAG;
 
+/*
+ * Trace to serial.
+ *
+ * A driver AHI never loads leaves no other trace: there is no error, no
+ * console, and nothing in the log to say whether AHI declined to open it or
+ * never looked. These few lines say which.
+ */
+#define BTA_LOG(...) IExec->DebugPrintF("[bluetooth.audio] " __VA_ARGS__)
+
 /* -------------------------------------------------------------------------- */
 
 struct BluetoothAudioIFace;
 
-struct BluetoothAudioIFace * VARARGS68K _btaudio_Clone(struct BluetoothAudioIFace * Self){
+struct BluetoothAudioIFace * _btaudio_Clone(struct BluetoothAudioIFace * Self){
     (void) Self;
     /* an AHI sub-driver is used by one AHI at a time; nothing to clone */
     return (struct BluetoothAudioIFace *) 0;
 }
 
-uint32 VARARGS68K _btaudio_Obtain(struct BluetoothAudioIFace * Self){
+uint32 _btaudio_Obtain(struct BluetoothAudioIFace * Self){
     return ((struct Interface *) Self)->Data.RefCount++;
 }
 
-uint32 VARARGS68K _btaudio_Release(struct BluetoothAudioIFace * Self){
+uint32 _btaudio_Release(struct BluetoothAudioIFace * Self){
     return --((struct Interface *) Self)->Data.RefCount;
 }
 
@@ -57,6 +66,8 @@ uint32 VARARGS68K _btaudio_Release(struct BluetoothAudioIFace * Self){
 STATIC struct Library * libInit(struct BluetoothAudioBase * libBase, BPTR seglist,
                                 struct Interface * exec){
     IExec = (struct ExecIFace *) exec;
+
+    BTA_LOG("libInit\n");
 
     libBase->libNode.lib_Node.ln_Type = NT_LIBRARY;
     libBase->libNode.lib_Node.ln_Pri  = 0;
@@ -82,6 +93,7 @@ STATIC struct Library * libInit(struct BluetoothAudioBase * libBase, BPTR seglis
      * Hooks, and CallHookPkt is the only way to call one.
      */
     if ((IDOS == NULL) || (IUtility == NULL)){
+        BTA_LOG("libInit failed: dos %p utility %p\n", (void *) IDOS, (void *) IUtility);
         if (IDOS != NULL)     IExec->DropInterface((struct Interface *) IDOS);
         if (IUtility != NULL) IExec->DropInterface((struct Interface *) IUtility);
         if (DOSBase != NULL)     IExec->CloseLibrary(DOSBase);
@@ -89,6 +101,7 @@ STATIC struct Library * libInit(struct BluetoothAudioBase * libBase, BPTR seglis
         return NULL;
     }
 
+    BTA_LOG("libInit done, version %lu\n", (unsigned long) VERSION);
     return &libBase->libNode;
 }
 
@@ -115,7 +128,13 @@ STATIC BPTR libExpunge(struct LibraryManagerInterface * Self){
 STATIC struct Library * libOpen(struct LibraryManagerInterface * Self, ULONG version){
     struct BluetoothAudioBase * libBase = (struct BluetoothAudioBase *) Self->Data.LibBase;
 
-    if (version > VERSION) return NULL;
+    BTA_LOG("libOpen: asked for version %lu, we are %lu\n",
+            (unsigned long) version, (unsigned long) VERSION);
+
+    if (version > VERSION){
+        BTA_LOG("libOpen: refused on version\n");
+        return NULL;
+    }
 
     libBase->libNode.lib_OpenCnt++;
     libBase->libNode.lib_Flags &= ~LIBF_DELEXP;
