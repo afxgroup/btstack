@@ -58,7 +58,7 @@
 #include "l2cap.h"
 
 static l2cap_ertm_config_t ertm_config = {
-    1,  // ertm mandatory
+    GOEP_SERVER_ERTM_MANDATORY,  // ertm mandatory, see goep_server.h
     2,  // max transmit, some tests require > 1
     2000,
     12000,

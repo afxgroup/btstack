@@ -57,6 +57,24 @@ extern "C" {
 #ifndef GOEP_SERVER_ERTM_BUFFER
 #define GOEP_SERVER_ERTM_BUFFER 2000
 #endif
+
+/*
+ * Whether Enhanced Retransmission Mode is required on the L2CAP bearer.
+ *
+ * GOEP 2.0 specifies it, and l2cap closes the channel when a peer's configure
+ * request carries no Retransmission and Flow Control option - which is how a
+ * peer proposes Basic Mode. Some do: they send MTU and FCS and nothing else,
+ * and get disconnected without being offered a second attempt, where the
+ * opposite case (we in basic, peer asking for ERTM) is rejected once and
+ * retried.
+ *
+ * A port that would rather have the channel in Basic Mode than not at all can
+ * set this to 0. Single Response Mode is negotiated in OBEX headers rather than
+ * by l2cap, so it does not depend on the mode the bearer settled on.
+ */
+#ifndef GOEP_SERVER_ERTM_MANDATORY
+#define GOEP_SERVER_ERTM_MANDATORY 1
+#endif
 #endif
 
 /* API_START */

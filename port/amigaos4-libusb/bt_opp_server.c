@@ -34,30 +34,15 @@
 
 #define OPP_RFCOMM_CHANNEL     9
 /*
- * RFCOMM only. GOEP 1.1, and the reason is worth writing down.
+ * Both bearers. GOEP 2.0 over L2CAP is what makes Single Response Mode
+ * possible, and SRM is what removes the response wait between packets - without
+ * it a transfer runs at about seventeen packets a second whatever else is done.
  *
- * GOEP 2.0 - OBEX over L2CAP - is what makes Single Response Mode possible,
- * and SRM is what removes the response wait between packets. Without it every
- * OBEX packet costs a round trip and a transfer runs at about seventeen a
- * second, which is what this does. So the L2CAP bearer was worth several
- * attempts.
- *
- * It does not negotiate with this peer. The packet log shows the channel
- * accepted, the far end's configure request handled, and then a disconnection
- * sent by us. BTstack's GOEP server sets ertm_mandatory in its L2CAP
- * configuration, so a peer that does not agree to Enhanced Retransmission Mode
- * on this PSM leaves it no choice but to close the channel - and that is what
- * "connection reset by peer" was, from the other side.
- *
- * Enlarging the ERTM buffer does not help and cannot: l2cap derives the MPS
- * from it, so the layout it has to fit grows with the room it is given. 20000
- * gave an MPS of 1238, 28000 gave 1738, and the fit is as tight either way.
- *
- * Advertising a bearer that is chosen in preference and then fails is worse
- * than not offering it: the sender picks it, waits, and reports a failure.
- * RFCOMM is slower and works.
+ * The L2CAP channel used to be closed during configuration because BTstack
+ * required ERTM on it and this peer proposes Basic Mode. That requirement is
+ * now off, see GOEP_SERVER_ERTM_MANDATORY in btstack_config.h.
  */
-#define OPP_L2CAP_PSM          0
+#define OPP_L2CAP_PSM          0x1015
 #define OPP_MAX_FRAME_SIZE     0xFFFF
 #define OPP_NAME_MAX           64
 #define OPP_PATH_MAX           256
@@ -428,7 +413,7 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 /* -------------------------------------------------------------------------- */
 
 static void opp_create_sdp_record(uint8_t * service, uint32_t service_record_handle,
-                                  uint8_t rfcomm_channel, const char * name){
+                                  uint8_t rfcomm_channel, uint16_t l2cap_psm, const char * name){
     uint8_t * attribute;
     de_create_sequence(service);
 
@@ -473,6 +458,11 @@ static void opp_create_sdp_record(uint8_t * service, uint32_t service_record_han
     }
     de_pop_sequence(service, attribute);
 
+    /* GOEP L2CAP PSM: how a GOEP 2.0 sender reaches us, and the only route by
+     * which Single Response Mode is ever negotiated */
+    de_add_number(service, DE_UINT, DE_SIZE_16, BLUETOOTH_ATTRIBUTE_GOEP_L2CAP_PSM);
+    de_add_number(service, DE_UINT, DE_SIZE_16, l2cap_psm);
+
     de_add_number(service, DE_UINT, DE_SIZE_16, 0x0100);   /* ServiceName */
     de_add_data(service, DE_STRING, (uint16_t) strlen(name), (uint8_t *) name);
 
@@ -508,10 +498,10 @@ void bt_opp_server_init(const char * service_name){
 
     memset(opp_sdp_record, 0, sizeof(opp_sdp_record));
     opp_create_sdp_record(opp_sdp_record, sdp_create_service_record_handle(),
-                          OPP_RFCOMM_CHANNEL,
+                          OPP_RFCOMM_CHANNEL, OPP_L2CAP_PSM,
                           (service_name != NULL) ? service_name : "Object Push");
     sdp_register_service(opp_sdp_record);
 
-    DebugPrintF("opp: object push on RFCOMM channel %u, files go to %s\n",
-                OPP_RFCOMM_CHANNEL, opp_folder);
+    DebugPrintF("opp: object push on RFCOMM %u and L2CAP 0x%04x, files go to %s\n",
+                OPP_RFCOMM_CHANNEL, OPP_L2CAP_PSM, opp_folder);
 }

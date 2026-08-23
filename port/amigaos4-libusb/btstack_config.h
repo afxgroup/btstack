@@ -45,6 +45,24 @@
  * thousand spare.
  */
 #define GOEP_SERVER_ERTM_BUFFER 28000
+
+/*
+ * Take the L2CAP channel in whatever mode the peer will agree to.
+ *
+ * l2cap closes an ERTM-mandatory channel the moment a configure request arrives
+ * without a Retransmission and Flow Control option, and this peer sends MTU and
+ * FCS and nothing else - Basic Mode. The packet log shows the channel accepted,
+ * that request handled, and a disconnection sent by us; the sender reports it as
+ * the connection being reset. Note the asymmetry in l2cap: the opposite case,
+ * where we want basic and the peer asks for ERTM, is rejected once and retried.
+ * This one gets no second attempt.
+ *
+ * The mode is not what the speed depends on. Single Response Mode is negotiated
+ * in OBEX headers rather than by l2cap, and SRM is what removes the response
+ * wait between packets - so a Basic Mode channel that opens is worth more here
+ * than an ERTM channel that does not.
+ */
+#define GOEP_SERVER_ERTM_MANDATORY 0
 #define ENABLE_HFP_WIDE_BAND_SPEECH
 #define ENABLE_L2CAP_ENHANCED_RETRANSMISSION_MODE
 #define ENABLE_L2CAP_LE_CREDIT_BASED_FLOW_CONTROL_MODE
