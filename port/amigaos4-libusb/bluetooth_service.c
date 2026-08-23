@@ -1305,13 +1305,36 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             uint8_t         addr_type;
             int8_t          rssi;
 
+            /*
+             * Whether this is something anyone could connect to.
+             *
+             * The air is full of LE devices that are not offering anything:
+             * beacons announcing their existence, sensors, and phones and
+             * watches whose privacy addresses change every few minutes. They
+             * are what filled the list with nameless entries where another
+             * machine showed six devices - not because the other machine hears
+             * less, but because it does not show what cannot be used.
+             *
+             * ADV_IND and ADV_DIRECT_IND are connectable. ADV_SCAN_IND and
+             * ADV_NONCONN_IND are not, and a scan response only ever belongs to
+             * a device already seen through one of the others. The legacy
+             * report gives the type directly; the extended one puts the
+             * connectable bit at 0 and the scannable bit at 1.
+             */
+            bool connectable;
+
             if (hci_event_packet_get_type(packet) == GAP_EVENT_ADVERTISING_REPORT){
+                uint8_t event_type = gap_event_advertising_report_get_advertising_event_type(packet);
+                connectable = (event_type == 0) || (event_type == 1) || (event_type == 4);
                 gap_event_advertising_report_get_address(packet, addr);
                 addr_type = gap_event_advertising_report_get_address_type(packet);
                 rssi      = (int8_t) gap_event_advertising_report_get_rssi(packet);
                 ad_data   = gap_event_advertising_report_get_data(packet);
                 ad_len    = gap_event_advertising_report_get_data_length(packet);
             } else {
+                uint16_t event_type = gap_event_extended_advertising_report_get_advertising_event_type(packet);
+                /* bit 0 connectable, bit 3 marks a scan response */
+                connectable = ((event_type & 1) != 0) || ((event_type & 8) != 0);
                 gap_event_extended_advertising_report_get_address(packet, addr);
                 addr_type = gap_event_extended_advertising_report_get_address_type(packet);
                 rssi      = gap_event_extended_advertising_report_get_rssi(packet);
@@ -1341,6 +1364,14 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                 service_log("service: adv from %s, %u bytes of data, rssi %d\n",
                             bd_addr_to_str(addr), ad_len, rssi);
             }
+
+            /*
+             * A device already in the table keeps being followed whatever it
+             * sends - it may be a known one whose advertisement went
+             * non-connectable for a moment, and dropping it would lose the
+             * name arriving in a scan response.
+             */
+            if (!connectable && (device_for_addr(addr) == NULL)) break;
 
             const bt_profile_handler_t * handler = bt_profile_handler_probe(ad_data, ad_len);
 
