@@ -220,13 +220,18 @@ Mode channel that opens beats an ERTM channel that does not.
 
 **The radio has to be left alone.** Paging a sleeping keyboard costs a five
 second page timeout each time, and the LE scan runs a quarter of the time
-permanently. Both were happening throughout every transfer, and both are now
-suspended while one is running. Together they were about a third of the
-throughput.
+permanently. Both were happening throughout every transfer. Paging stops while
+one runs; the scan is narrowed to a twentieth rather than stopped, because a
+known device coming back into range would otherwise go unnoticed for as long as
+the transfer lasts, and a large file is minutes. Together they were about a
+third of the throughput.
 
 **Enough reads in flight.** With one ACL read outstanding the controller has
 nowhere to put the next packet until the last has been processed, so throughput
 becomes one packet per round trip. There are sixteen.
+
+For scale: Linux sending to an Android phone over the same profile manages about
+41 kB/s, so this is not the slow end of what Bluetooth file transfer does.
 
 If it ever needs looking at again, the numbers to reach for are in the log at
 the end of each transfer - bytes, packets, elapsed time - and `-l FILE` writes a

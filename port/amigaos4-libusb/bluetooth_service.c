@@ -915,6 +915,23 @@ static uint8_t devices_load(void){
  * Checked on a tick rather than driven by the transfer, so the service does not
  * need to know when one starts. A second of scanning either way costs nothing.
  */
+/*
+ * How much of the time to scan, normally and during a transfer.
+ *
+ * A quarter of the time is what finds a device promptly. Keeping that up during
+ * a transfer costs about a fifth of the throughput, and stopping altogether -
+ * which is what this did first - costs something less obvious: a known device
+ * coming back into range is not noticed for as long as the transfer lasts, and
+ * a big file is minutes.
+ *
+ * A twentieth is the middle ground. Reconnection still happens, a few seconds
+ * later than it would otherwise, and the radio is left to the link that is
+ * carrying something.
+ */
+#define SCAN_INTERVAL          96    /* 60 ms */
+#define SCAN_WINDOW            24    /* 15 ms, a quarter of the time */
+#define SCAN_WINDOW_TRANSFER    5    /* ~3 ms, a twentieth */
+
 #define TRANSFER_WATCH_MS 1000
 static btstack_timer_source_t transfer_watch_timer;
 static bool                   scan_paused_for_transfer;
@@ -931,14 +948,14 @@ static void transfer_watch(btstack_timer_source_t * ts){
     bool busy = bt_opp_server_is_busy();
 
     if (busy && scanning && !scan_paused_for_transfer){
-        gap_stop_scan();
-        scanning                 = false;
+        /* narrowed, not stopped: a device coming back still gets noticed */
+        gap_set_scan_parameters(1, SCAN_INTERVAL, SCAN_WINDOW_TRANSFER);
         scan_paused_for_transfer = true;
-        service_log("service: a transfer is running, pausing the scan\n");
+        service_log("service: a transfer is running, scanning less\n");
     } else if (!busy && scan_paused_for_transfer){
         scan_paused_for_transfer = false;
-        service_log("service: transfer done, scanning again\n");
-        scan_start(true);
+        gap_set_scan_parameters(1, SCAN_INTERVAL, SCAN_WINDOW);
+        service_log("service: transfer done, scanning normally again\n");
     }
 }
 
@@ -1125,7 +1142,7 @@ static void scan_start(bool autoconnect){
      * 60 ms interval, 15 ms window. A device advertising at any normal rate is
      * still found within a second or so.
      */
-    gap_set_scan_parameters(1, 96, 24);
+    gap_set_scan_parameters(1, SCAN_INTERVAL, SCAN_WINDOW);
     gap_start_scan();
     scanning = true;
     le_reception_confirmed = false;
