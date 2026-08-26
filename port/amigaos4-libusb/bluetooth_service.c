@@ -55,6 +55,7 @@
 #include "classic/rfcomm.h"
 #include "bt_profile_handler.h"
 #include "bt_service_port.h"
+#include "bt_notify.h"
 #include "btstack_run_loop_amigaos.h"
 
 #define MAX_DEVICES 32
@@ -721,6 +722,7 @@ static void handler_status(const bt_profile_handler_t * handler, const bd_addr_t
         devices_store();
         service_log("service: %s in use by handler '%s'\n",
                     bd_addr_to_str(device->info.bd_addr), device->info.handler);
+        bt_notify_connected(device->info.name);
         /* nothing left to find means nothing worth disturbing the radio for */
         if (!discovery_needed()){
             service_log("service: everything known is connected, discovery idle\n");
@@ -1731,6 +1733,26 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             break;
 
         /*
+         * The Classic half of pairing. The LE side reports through
+         * SM_EVENT_PAIRING_COMPLETE; a Classic device never goes near the
+         * security manager, so without this a keyboard could pair and say so
+         * nowhere.
+         */
+        case HCI_EVENT_SIMPLE_PAIRING_COMPLETE: {
+            hci_event_simple_pairing_complete_get_bd_addr(packet, addr);
+            uint8_t ssp_status = hci_event_simple_pairing_complete_get_status(packet);
+
+            service_log("service: pairing with %s finished, status 0x%02x\n",
+                        bd_addr_to_str(addr), ssp_status);
+
+            if (ssp_status == ERROR_CODE_SUCCESS){
+                bt_device_t * bonded = device_for_addr(addr);
+                bt_notify_paired(bonded ? bonded->info.name : NULL);
+            }
+            break;
+        }
+
+        /*
          * Authentication failing is not the same as a link failing.
          *
          * The three statuses below all mean the same practical thing: the key
@@ -1853,6 +1875,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             service_log("service: %s disconnected, reason 0x%02x\n",
                         bd_addr_to_str(device->info.bd_addr),
                         hci_event_disconnection_complete_get_reason(packet));
+            bt_notify_disconnected(device->info.name);
 
             /* a device we are meant to use reconnects when we see it again -
              * advertising on LE, inquiry on Classic, both of which scan_start()
@@ -1903,6 +1926,12 @@ static void sm_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *pa
             con_handle = sm_event_pairing_complete_get_handle(packet);
             if (sm_event_pairing_complete_get_status(packet) == ERROR_CODE_SUCCESS){
                 encrypted = true;
+                {
+                    /* the pairing itself, not a reconnection: re-encrypting an
+                     * existing bond arrives as SM_EVENT_REENCRYPTION_COMPLETE */
+                    bt_device_t * bonded = device_for_handle(con_handle);
+                    bt_notify_paired(bonded ? bonded->info.name : NULL);
+                }
             } else {
                 bt_device_t * failed = device_for_handle(con_handle);
                 service_log("service: pairing with %s (addr type %u) failed, status 0x%02x reason 0x%02x\n",
@@ -2188,6 +2217,14 @@ int btstack_main(int argc, const char * argv[]){
     service_log("BluetoothService starting, port '%s' (protocol %u, built %s %s)\n",
                 BLUETOOTH_SERVICE_PORT_NAME, (unsigned) BLUETOOTH_SERVICE_VERSION,
                 __DATE__, __TIME__);
+
+    /*
+     * Notifications first: the service has no window, so without them a pairing
+     * or a received file is announced nowhere the user is looking. It is
+     * optional - a failure here leaves the calls silent and changes nothing
+     * else - so it is not checked.
+     */
+    bt_notify_open();
 
     if (amigaos4_input_open() == false){
         service_log("ERROR: cannot open input.device\n");

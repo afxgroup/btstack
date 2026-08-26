@@ -81,6 +81,7 @@
 #include "btstack_stdin.h"
 #include "amigaos4_input.h"
 #include "bt_service_port.h"
+#include "bt_notify.h"
 #include "bt_usb_watch.h"
 #include "btstack_tlv_posix.h"
 #include "classic/btstack_link_key_db_tlv.h"
@@ -482,6 +483,10 @@ static void shutdown_everything(bool ran)
     // the process is gone, its signal bits are never freed, and the next start
     // finds the name taken by a port belonging to a task that no longer exists.
     bt_service_port_close();
+
+    // Unregister from application.library. Does nothing if the service never
+    // registered, which is the case for every other program built from here.
+    bt_notify_close();
 
     // Stop listening for USB devices coming and going. Nothing is subscribed
     // unless the service set it up, so this does nothing for bthid.

@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "bt_opp_server.h"
+#include "bt_notify.h"
 
 #include <proto/exec.h>
 
@@ -147,6 +148,20 @@ static void opp_file_close(bool keep){
                      * what 32 bits hold, and the rate printed was nonsense */
                     (unsigned long) (((uint64_t) opp_received * 1000) / elapsed_ms),
                     (unsigned long) (opp_packets ? (opp_received / opp_packets) : 0));
+
+        /*
+         * Tell the user, by name only. opp_path carries the destination folder,
+         * which is noise in a notification - what matters is what arrived, and
+         * where it went is already their own setting.
+         */
+        {
+            const char * leaf = opp_path;
+            const char * p;
+            for (p = opp_path; *p != 0; p++){
+                if ((*p == '/') || (*p == ':')) leaf = p + 1;
+            }
+            bt_notify_file_received(leaf);
+        }
     } else {
         remove(opp_path);
         DebugPrintF("opp: transfer of '%s' was abandoned\n", opp_path);

@@ -1,0 +1,29 @@
+; *********************************************************
+; Catalog description file for BluetoothService
+; $VER: BluetoothService.cd 1.0 (26.08.2026)
+; *********************************************************
+;
+MSG_NOTIFY_TITLE (2000//64)
+Bluetooth
+; The title shown on every notification
+;
+MSG_NOTIFY_PAIRED (//128)
+%s is paired and ready to use
+; %s is the device name
+;
+MSG_NOTIFY_CONNECTED (//128)
+%s is connected
+; %s is the device name
+;
+MSG_NOTIFY_DISCONNECTED (//128)
+%s has disconnected
+; %s is the device name
+;
+MSG_NOTIFY_FILE (//128)
+Received %s
+; %s is the name of the file that arrived
+;
+MSG_NOTIFY_UNNAMED (//64)
+A Bluetooth device
+; Used in place of a name when the device has not given one
+;
