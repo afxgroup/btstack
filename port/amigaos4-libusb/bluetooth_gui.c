@@ -431,8 +431,10 @@ static void pairing_show(const char * name){
     char line[128];
     snprintf(line, sizeof(line), (const char *) GetString(MSG_PAIRING_PASSKEY),
              name_or_unknown(name), (unsigned long) pairing_passkey);
+    /* the window is where this belongs; a serial copy was only noise, and it
+     * appeared once per pairing attempt on a line being used to watch the
+     * service */
     status_text((CONST_STRPTR) line);
-    DebugPrintF("BluetoothGUI: %s\n", line);
 }
 
 static void addr_to_str(const uint8 * addr, char * out){

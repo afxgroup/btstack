@@ -50,6 +50,7 @@
 
 #include "amigaos4_input.h"
 #include "btstack_debug.h"
+#include "bt_log.h"
 
 static struct MsgPort  * input_port;
 static struct IOStdReq * input_req;      /* template, used to open the device */
@@ -320,7 +321,7 @@ static bool input_send(uint8_t class, uint16_t code, uint16_t qualifier, int16_t
 
         if (opt_log_buttons && (class == IECLASS_RAWMOUSE) && (code != IECODE_NOBUTTON)){
             /* serial, not the console - see the note at the top of this file */
-            DebugPrintF("input: button event code 0x%02x (%s), qualifier 0x%04x\n",
+            BT_LOG("input: button event code 0x%02x (%s), qualifier 0x%04x\n",
                         (unsigned int) code,
                         (code & IECODE_UP_PREFIX) ? "release" : "press",
                         (unsigned int) qualifier);
@@ -451,7 +452,7 @@ void amigaos4_input_poll(void){
 
 void amigaos4_input_dump_stats(void){
     /* called from the run loop, so serial only - see the note at the top */
-    DebugPrintF("input: %lu sent, %lu coalesced, %lu dropped, queue max %u, in flight %u\n",
+    BT_LOG("input: %lu sent, %lu coalesced, %lu dropped, queue max %u, in flight %u\n",
            (unsigned long) input_sent_events,
            (unsigned long) input_coalesced_events,
            (unsigned long) input_dropped_events,

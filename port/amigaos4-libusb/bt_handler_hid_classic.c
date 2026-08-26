@@ -33,6 +33,7 @@
 
 #include "bt_handler_hid_classic.h"
 #include "bt_hid_report.h"
+#include "bt_log.h"
 
 static uint8_t hid_descriptor_storage[500];
 
@@ -69,17 +70,17 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
              */
             uint16_t incoming_cid = hid_subevent_incoming_connection_get_hid_cid(packet);
             if (hid_subevent_incoming_connection_get_status(packet) != ERROR_CODE_SUCCESS){
-                DebugPrintF("hid classic: incoming connection refused by the stack\n");
+                BT_LOG("hid classic: incoming connection refused by the stack\n");
                 hid_host_decline_connection(incoming_cid);
                 break;
             }
             if (hid_con_handle != HCI_CON_HANDLE_INVALID){
                 /* already driving one; a second would fight it for the pointer */
-                DebugPrintF("hid classic: declining a second incoming connection\n");
+                BT_LOG("hid classic: declining a second incoming connection\n");
                 hid_host_decline_connection(incoming_cid);
                 break;
             }
-            DebugPrintF("hid classic: incoming connection, accepting\n");
+            BT_LOG("hid classic: incoming connection, accepting\n");
             hid_cid = incoming_cid;
             hid_host_accept_connection(incoming_cid, HID_PROTOCOL_MODE_REPORT);
             break;
@@ -97,7 +98,7 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
              */
             sniff_max_latency = hid_subevent_sniff_subrating_params_get_host_max_latency(packet);
             sniff_min_timeout = hid_subevent_sniff_subrating_params_get_host_min_timeout(packet);
-            DebugPrintF("hid classic: sniff subrating, max latency %u, min timeout %u\n",
+            BT_LOG("hid classic: sniff subrating, max latency %u, min timeout %u\n",
                         sniff_max_latency, sniff_min_timeout);
             break;
 
@@ -105,14 +106,14 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
             uint8_t status = hid_subevent_connection_opened_get_status(packet);
             hid_subevent_connection_opened_get_bd_addr(packet, hid_addr);
             if (status != ERROR_CODE_SUCCESS){
-                DebugPrintF("hid classic: connection failed, status 0x%02x\n", status);
+                BT_LOG("hid classic: connection failed, status 0x%02x\n", status);
                 hid_con_handle = HCI_CON_HANDLE_INVALID;
                 bt_profile_handler_report_status(&bt_handler_hid_classic, hid_addr, HCI_CON_HANDLE_INVALID, false, status);
                 break;
             }
             hid_cid        = hid_subevent_connection_opened_get_hid_cid(packet);
             hid_con_handle = hid_subevent_connection_opened_get_con_handle(packet);
-            DebugPrintF("hid classic: connected to %s, cid 0x%04x\n",
+            BT_LOG("hid classic: connected to %s, cid 0x%04x\n",
                         bd_addr_to_str(hid_addr), hid_cid);
             /* now there is a handle to apply the device's own sniff request to */
             if (sniff_max_latency != 0){
@@ -120,7 +121,7 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
                                                                     sniff_max_latency,
                                                                     sniff_min_timeout,
                                                                     sniff_min_timeout);
-                DebugPrintF("hid classic: sniff subrating configured, status 0x%02x\n", sniff_status);
+                BT_LOG("hid classic: sniff subrating configured, status 0x%02x\n", sniff_status);
             }
 
             bt_profile_handler_report_status(&bt_handler_hid_classic, hid_addr, hid_con_handle, true, ERROR_CODE_SUCCESS);
@@ -133,7 +134,7 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
              * boot protocol descriptor until it does - which is why
              * bt_hid_report_process() falls back to it rather than refusing.
              */
-            DebugPrintF("hid classic: report descriptor available, status 0x%02x, %u bytes\n",
+            BT_LOG("hid classic: report descriptor available, status 0x%02x, %u bytes\n",
                         hid_subevent_descriptor_available_get_status(packet),
                         hid_descriptor_storage_get_descriptor_len(hid_cid));
 
@@ -162,7 +163,7 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
                     line[col * 3 + 2] = ' ';
                     if ((col == 15) || (i + 1 == len)){
                         line[col * 3 + 3] = 0;
-                        DebugPrintF("hid classic: desc %s\n", line);
+                        BT_LOG("hid classic: desc %s\n", line);
                     }
                 }
             }
@@ -180,7 +181,7 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
              * the other, every field is off and what comes out is not the key
              * that was pressed.
              */
-            DebugPrintF("hid classic: set protocol response, handshake 0x%02x\n",
+            BT_LOG("hid classic: set protocol response, handshake 0x%02x\n",
                         hid_subevent_set_protocol_response_get_handshake_status(packet));
             break;
 
@@ -217,7 +218,7 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
                     hex[k * 3 + 2] = ' ';
                 }
                 hex[n * 3] = 0;
-                DebugPrintF("hid classic: report %s(%u bytes, descriptor %u bytes)\n",
+                BT_LOG("hid classic: report %s(%u bytes, descriptor %u bytes)\n",
                             hex, report_len,
                             hid_descriptor_storage_get_descriptor_len(hid_cid));
             }
@@ -229,7 +230,7 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
         }
 
         case HID_SUBEVENT_CONNECTION_CLOSED: {
-            DebugPrintF("hid classic: disconnected\n");
+            BT_LOG("hid classic: disconnected\n");
             /* never leave a key or a button down for the whole system */
             bt_hid_report_release_all();
             hci_con_handle_t gone = hid_con_handle;
@@ -246,7 +247,7 @@ static void hid_classic_packet_handler(uint8_t packet_type, uint16_t channel, ui
              * protocol, or suspends, this is where that shows up instead of
              * disappearing into a silent default case.
              */
-            DebugPrintF("hid classic: subevent 0x%02x\n",
+            BT_LOG("hid classic: subevent 0x%02x\n",
                         hci_event_hid_meta_get_subevent_code(packet));
             break;
     }

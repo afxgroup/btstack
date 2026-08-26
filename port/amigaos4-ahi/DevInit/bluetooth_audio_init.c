@@ -34,14 +34,6 @@ struct Interface * INewlib;
 
 STATIC CONST TEXT USED verstag[] = VERSTAG;
 
-/*
- * Trace to serial.
- *
- * A driver AHI never loads leaves no other trace: there is no error, no
- * console, and nothing in the log to say whether AHI declined to open it or
- * never looked. These few lines say which.
- */
-#define BTA_LOG(...) IExec->DebugPrintF("[bluetooth.audio] " __VA_ARGS__)
 
 /* -------------------------------------------------------------------------- */
 

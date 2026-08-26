@@ -30,6 +30,7 @@
 #include "classic/sdp_util.h"
 #include "bluetooth_sdp.h"
 #include "bluetooth_service.h"
+#include "bt_log.h"
 #include <exec/exectags.h>
 
 /*
@@ -288,7 +289,7 @@ static void a2dp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *
                 (num_channels == 1) ? SBC_CHANNEL_MODE_MONO : SBC_CHANNEL_MODE_JOINT_STEREO);
 
             if (audio_ring != NULL) audio_ring->bar_SampleRate = stream_sample_rate;
-            DebugPrintF("a2dp: codec agreed, %lu Hz, %u channels, bitpool %u\n",
+            BT_LOG("a2dp: codec agreed, %lu Hz, %u channels, bitpool %u\n",
                         (unsigned long) stream_sample_rate,
                         num_channels,
                         a2dp_subevent_signaling_media_codec_sbc_configuration_get_max_bitpool_value(packet));
@@ -311,7 +312,7 @@ static void a2dp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *
             uint8_t status = a2dp_subevent_stream_established_get_status(packet);
             a2dp_subevent_stream_established_get_bd_addr(packet, a2dp_addr);
             if (status != ERROR_CODE_SUCCESS){
-                DebugPrintF("a2dp: stream to %s failed, status 0x%02x\n",
+                BT_LOG("a2dp: stream to %s failed, status 0x%02x\n",
                             bd_addr_to_str(a2dp_addr), status);
                 a2dp_cid = 0;
                 bt_profile_handler_report_status(&bt_handler_a2dp, a2dp_addr,
@@ -320,7 +321,7 @@ static void a2dp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *
             }
             a2dp_cid   = a2dp_subevent_stream_established_get_a2dp_cid(packet);
             local_seid = a2dp_subevent_stream_established_get_local_seid(packet);
-            DebugPrintF("a2dp: stream to %s established\n", bd_addr_to_str(a2dp_addr));
+            BT_LOG("a2dp: stream to %s established\n", bd_addr_to_str(a2dp_addr));
 
             /* nothing plays until something asks it to, so start it here: a
              * speaker that connects and stays silent looks broken */
@@ -329,7 +330,7 @@ static void a2dp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *
         }
 
         case A2DP_SUBEVENT_STREAM_STARTED:
-            DebugPrintF("a2dp: streaming\n");
+            BT_LOG("a2dp: streaming\n");
             audio_timer_start();
             bt_profile_handler_report_status(&bt_handler_a2dp, a2dp_addr,
                                              a2dp_con_handle, true, ERROR_CODE_SUCCESS);
@@ -347,13 +348,13 @@ static void a2dp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *
 
         case A2DP_SUBEVENT_STREAM_SUSPENDED:
         case A2DP_SUBEVENT_STREAM_STOPPED:
-            DebugPrintF("a2dp: streaming stopped\n");
+            BT_LOG("a2dp: streaming stopped\n");
             audio_timer_stop();
             break;
 
         case A2DP_SUBEVENT_STREAM_RELEASED:
         case A2DP_SUBEVENT_SIGNALING_CONNECTION_RELEASED:
-            DebugPrintF("a2dp: disconnected\n");
+            BT_LOG("a2dp: disconnected\n");
             audio_timer_stop();
             a2dp_cid        = 0;
             a2dp_con_handle = HCI_CON_HANDLE_INVALID;
@@ -363,7 +364,7 @@ static void a2dp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *
 
         default:
             if (verbose){
-                DebugPrintF("a2dp: subevent 0x%02x\n",
+                BT_LOG("a2dp: subevent 0x%02x\n",
                             hci_event_a2dp_meta_get_subevent_code(packet));
             }
             break;
@@ -381,7 +382,7 @@ static void a2dp_init(void){
                                                          sbc_capabilities, sizeof(sbc_capabilities),
                                                          sbc_configuration, sizeof(sbc_configuration));
     if (stream_endpoint == NULL){
-        DebugPrintF("a2dp: cannot create the stream endpoint\n");
+        BT_LOG("a2dp: cannot create the stream endpoint\n");
         return;
     }
     avdtp_set_preferred_sampling_frequency(stream_endpoint, PREFERRED_SAMPLE_RATE);
@@ -394,7 +395,7 @@ static void a2dp_init(void){
                                   AVDTP_SOURCE_FEATURE_MASK_PLAYER, NULL, NULL);
     sdp_register_service(a2dp_sdp_record);
 
-    DebugPrintF("a2dp: source ready, seid %u\n", local_seid);
+    BT_LOG("a2dp: source ready, seid %u\n", local_seid);
 }
 
 /*

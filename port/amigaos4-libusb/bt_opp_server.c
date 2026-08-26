@@ -32,6 +32,7 @@
 #include "bluetooth.h"
 #include "classic/sdp_util.h"
 #include "classic/sdp_server.h"
+#include "bt_log.h"
 
 #define OPP_RFCOMM_CHANNEL     9
 /*
@@ -139,7 +140,7 @@ static void opp_file_close(bool keep){
          */
         uint32_t elapsed_ms = btstack_run_loop_get_time_ms() - opp_started_ms;
         if (elapsed_ms == 0) elapsed_ms = 1;
-        DebugPrintF("opp: received '%s' - %lu bytes in %lu packets over %lu ms (%lu bytes/s, %lu bytes/packet)\n",
+        BT_LOG("opp: received '%s' - %lu bytes in %lu packets over %lu ms (%lu bytes/s, %lu bytes/packet)\n",
                     opp_path,
                     (unsigned long) opp_received,
                     (unsigned long) opp_packets,
@@ -164,7 +165,7 @@ static void opp_file_close(bool keep){
         }
     } else {
         remove(opp_path);
-        DebugPrintF("opp: transfer of '%s' was abandoned\n", opp_path);
+        BT_LOG("opp: transfer of '%s' was abandoned\n", opp_path);
     }
     opp_received = 0;
 }
@@ -184,7 +185,7 @@ static bool opp_file_open(void){
 
     opp_file = fopen(opp_path, "wb");
     if (opp_file == NULL){
-        DebugPrintF("opp: cannot write '%s'\n", opp_path);
+        BT_LOG("opp: cannot write '%s'\n", opp_path);
         return false;
     }
     opp_received   = 0;
@@ -221,7 +222,7 @@ static void opp_parser_callback(void * user_data, uint8_t header_id, uint16_t to
                 if (!opp_file_open()) break;
             }
             if (fwrite(data_buffer, 1, data_len, opp_file) != data_len){
-                DebugPrintF("opp: writing '%s' failed\n", opp_path);
+                BT_LOG("opp: writing '%s' failed\n", opp_path);
                 opp_file_close(false);
                 break;
             }
@@ -251,7 +252,7 @@ static void opp_handle_request(void){
      * what that looks like.
      */
     if (opp_packets == 2){
-        DebugPrintF("opp: single response mode is %s\n",
+        BT_LOG("opp: single response mode is %s\n",
                     obex_srm_server_is_srm_active(&opp_srm) ? "ON" : "OFF");
     }
 
@@ -342,7 +343,7 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                         /* the other half of the same omission: accepting can
                          * fail too, and a sender told nothing simply waits */
                         uint8_t accept_status = goep_server_accept_connection(opp_goep_cid);
-                        DebugPrintF("opp: incoming connection, accepting (status 0x%02x)\n",
+                        BT_LOG("opp: incoming connection, accepting (status 0x%02x)\n",
                                     accept_status);
                     }
                     break;
@@ -352,7 +353,7 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                     opp_name[0]  = 0;
                     obex_parser_init_for_request(&opp_parser, &opp_parser_callback, NULL);
                     obex_srm_server_init(&opp_srm);
-                    DebugPrintF("opp: connection opened, OBEX packets up to %u bytes\n",
+                    BT_LOG("opp: connection opened, OBEX packets up to %u bytes\n",
                                 goep_server_response_get_max_message_size(opp_goep_cid));
 
                     /*
@@ -379,7 +380,7 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                     opp_con_handle = goep_subevent_connection_opened_get_con_handle(packet);
                     hci_send_cmd(&hci_write_link_policy_settings, opp_con_handle,
                                  LM_LINK_POLICY_ENABLE_ROLE_SWITCH);
-                    DebugPrintF("opp: sniff disallowed on handle 0x%04x, leaving it (status 0x%02x)\n",
+                    BT_LOG("opp: sniff disallowed on handle 0x%04x, leaving it (status 0x%02x)\n",
                                 opp_con_handle, gap_sniff_mode_exit(opp_con_handle));
                     break;
 
@@ -390,7 +391,7 @@ static void opp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                      * that was never accepted - and the difference is where to
                      * go looking.
                      */
-                    DebugPrintF("opp: connection closed\n");
+                    BT_LOG("opp: connection closed\n");
                     /* a transfer cut off half way leaves a partial file, which
                      * is worse than no file: it looks like it worked */
                     opp_file_close(false);
@@ -507,7 +508,7 @@ void bt_opp_server_init(const char * service_name){
                                                   OPP_RFCOMM_CHANNEL, OPP_MAX_FRAME_SIZE,
                                                   OPP_L2CAP_PSM, l2cap_max_mtu(), LEVEL_0);
     if (status != ERROR_CODE_SUCCESS){
-        DebugPrintF("opp: cannot offer object push, status 0x%02x - not advertising it\n", status);
+        BT_LOG("opp: cannot offer object push, status 0x%02x - not advertising it\n", status);
         return;
     }
 
@@ -517,6 +518,6 @@ void bt_opp_server_init(const char * service_name){
                           (service_name != NULL) ? service_name : "Object Push");
     sdp_register_service(opp_sdp_record);
 
-    DebugPrintF("opp: object push on RFCOMM %u and L2CAP 0x%04x, files go to %s\n",
+    BT_LOG("opp: object push on RFCOMM %u and L2CAP 0x%04x, files go to %s\n",
                 OPP_RFCOMM_CHANNEL, OPP_L2CAP_PSM, opp_folder);
 }

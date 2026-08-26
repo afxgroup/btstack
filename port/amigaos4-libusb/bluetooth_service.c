@@ -56,6 +56,7 @@
 #include "bt_profile_handler.h"
 #include "bt_service_port.h"
 #include "bt_notify.h"
+#include "bt_log.h"
 #include "btstack_run_loop_amigaos.h"
 
 #define MAX_DEVICES 32
@@ -281,6 +282,14 @@ static void service_log(const char * format, ...){
     va_start(args, format);
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
+    /*
+     * Silent unless asked. These lines are the running commentary of a service
+     * that works, and on serial - the only place it can be watched once a
+     * handler is driving input - they buried anything worth reading. -v brings
+     * all of them back.
+     */
+    if (!bt_log_enabled) return;
+
     if (injecting_input || !have_console){
         DebugPrintF("%s", buffer);
     } else {
@@ -2253,6 +2262,7 @@ int btstack_main(int argc, const char * argv[]){
             forget_all = true;
         }
     }
+    bt_log_enabled = verbose;
     bt_handler_hid_set_verbose(verbose);
     bt_handler_hid_classic_set_verbose(verbose);
     bt_handler_a2dp_set_verbose(verbose);
@@ -2270,7 +2280,10 @@ int btstack_main(int argc, const char * argv[]){
      * log, which looked exactly like a bug that would not go away. A build
      * stamp costs one line and settles it before anything else is looked at.
      */
-    service_log("BluetoothService starting, port '%s' (protocol %u, built %s %s)\n",
+    /* deliberately not through service_log(): one line saying which binary is
+     * running is not noise, and it has twice settled a session spent chasing a
+     * bug that was already fixed in a build that was not the one running */
+    DebugPrintF("BluetoothService starting, port '%s' (protocol %u, built %s %s)\n",
                 BLUETOOTH_SERVICE_PORT_NAME, (unsigned) BLUETOOTH_SERVICE_VERSION,
                 __DATE__, __TIME__);
 

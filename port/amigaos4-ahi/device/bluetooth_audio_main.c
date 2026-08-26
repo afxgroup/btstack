@@ -121,11 +121,6 @@ void bluetooth_audio_ring_close(void){
 
 /* -------------------------------------------------------------------------- */
 
-/*
- * Trace to serial. AHI reports nothing when it declines a driver, so the only
- * way to tell which call it stops at is to have every entry point say so.
- */
-#define BTA_LOG(...) IExec->DebugPrintF("[bluetooth.audio] " __VA_ARGS__)
 
 uint32 _btaudio_AHIsub_AllocAudio(struct BluetoothAudioIFace * Self,
                                              struct TagItem * tagList,

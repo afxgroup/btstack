@@ -36,6 +36,7 @@
 #include "amigaos4_input.h"
 #include "bt_handler_hid.h"
 #include "bt_hid_report.h"
+#include "bt_log.h"
 
 static uint8_t hid_descriptor_storage[500];
 
@@ -64,10 +65,10 @@ static void hid_gatt_event_handler(uint8_t packet_type, uint16_t channel, uint8_
             {
                 uint8_t status = gattservice_subevent_hid_service_connected_get_status(packet);
                 if (status == ERROR_CODE_SUCCESS){
-                    DebugPrintF("hid: service connected, %d instances\n",
+                    BT_LOG("hid: service connected, %d instances\n",
                                 gattservice_subevent_hid_service_connected_get_num_instances(packet));
                 } else {
-                    DebugPrintF("hid: service connection failed, status 0x%02x\n", status);
+                    BT_LOG("hid: service connection failed, status 0x%02x\n", status);
                     hid_con_handle = HCI_CON_HANDLE_INVALID;
                 }
                 bt_profile_handler_report_status(&bt_handler_hid, hid_addr, hid_con_handle,
@@ -76,7 +77,7 @@ static void hid_gatt_event_handler(uint8_t packet_type, uint16_t channel, uint8_
             break;
 
         case GATTSERVICE_SUBEVENT_HID_SERVICE_DISCONNECTED:
-            DebugPrintF("hid: service disconnected\n");
+            BT_LOG("hid: service disconnected\n");
             /* do not leave a button or a key pressed behind */
             bt_hid_report_release_all();
             {

@@ -37,6 +37,20 @@ struct BluetoothAudioBase
 };
 
 /*
+ * Tracing, off unless the build asks for it.
+ *
+ * These messages found every fault in this driver, so they are kept - but a
+ * working driver has nothing to say, and AHI queries it often enough that
+ * leaving them on floods the serial line. Build with -DBTA_DEBUG to get them
+ * back; in an ordinary build they compile to nothing at all.
+ */
+#ifdef BTA_DEBUG
+#define BTA_LOG(...) IExec->DebugPrintF("[bluetooth.audio] " __VA_ARGS__)
+#else
+#define BTA_LOG(...) ((void) 0)
+#endif
+
+/*
  * Per-AllocAudio state.
  *
  * Hung off ahiac_DriverData, which AHI keeps for the driver's own use.
