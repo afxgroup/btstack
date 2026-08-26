@@ -1519,9 +1519,20 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 
             device->info.rssi = rssi;
 
-            /* remember which handler wants it, so connecting is a decision the
-             * user makes and not a guess made later */
-            if (handler != NULL){
+            /*
+             * Remember which handler wants it, so connecting is a decision the
+             * user makes and not a guess made later.
+             *
+             * But never repoint a device that is known over Classic. These
+             * earbuds are bonded as a Classic A2DP device and also advertise on
+             * LE under the same address, so an LE handler claiming the
+             * advertisement would replace the handler that actually drives
+             * them. The reconnect below then runs the Classic path holding an
+             * LE handler - the wrong profile for the transport, on a device
+             * that had been working.
+             */
+            if ((handler != NULL) &&
+                ((device->info.addr_type != 0xff) || (device->handler == NULL))){
                 device->handler   = handler;
                 device->info.kind = handler->kind;
             }
