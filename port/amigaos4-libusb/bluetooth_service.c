@@ -639,6 +639,30 @@ static bt_result_t classic_connect_now(bt_device_t * device){
 
     {
         uint8_t status = device->handler->connect_addr(device->info.bd_addr);
+
+        /*
+         * COMMAND_DISALLOWED is not a refusal, it is "already under way".
+         *
+         * avdtp_connect() answers it when a connection for this address already
+         * exists, and a2dp already mid-discovery answers it too. Both happen
+         * routinely when the device dials us at the same moment we dial it,
+         * which is exactly what headphones do when switched on near a paired
+         * machine - and the log showed it plainly: the "refusal" was followed
+         * immediately by the link coming up.
+         *
+         * Treating it as a failure undid a connection that was succeeding: the
+         * state went back to Paired, pending_device was cleared, the watchdog
+         * timer was dropped so nothing supervised the attempt any more, and a
+         * retry was scheduled that could only earn the same answer. Letting it
+         * stand costs nothing, because handler_status() concludes the attempt
+         * either way and the timer left running still bounds it.
+         */
+        if (status == ERROR_CODE_COMMAND_DISALLOWED){
+            service_log("service: %s is already connecting, letting that attempt finish\n",
+                        bd_addr_to_str(device->info.bd_addr));
+            return BT_RESULT_OK;
+        }
+
         if (status != ERROR_CODE_SUCCESS){
             service_log("service: classic connect to %s refused, status 0x%02x\n",
                         bd_addr_to_str(device->info.bd_addr), status);
