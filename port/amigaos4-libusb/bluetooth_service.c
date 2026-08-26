@@ -1730,11 +1730,50 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                         hci_event_encryption_change_get_status(packet));
             break;
 
-        case HCI_EVENT_AUTHENTICATION_COMPLETE:
+        /*
+         * Authentication failing is not the same as a link failing.
+         *
+         * The three statuses below all mean the same practical thing: the key
+         * we hold is no longer one the remote will accept. Keeping it means
+         * replaying a rejected key on every future attempt, so it goes, and the
+         * next connection pairs from scratch. Anything else is left alone -
+         * a transient failure should not throw away a working bond.
+         */
+        case HCI_EVENT_AUTHENTICATION_COMPLETE: {
+            hci_con_handle_t auth_handle =
+                hci_event_authentication_complete_get_connection_handle(packet);
+            uint8_t auth_status = hci_event_authentication_complete_get_status(packet);
+
             service_log("service: authentication on handle 0x%04x, status 0x%02x\n",
-                        hci_event_authentication_complete_get_connection_handle(packet),
-                        hci_event_authentication_complete_get_status(packet));
+                        auth_handle, auth_status);
+
+            if ((auth_status == ERROR_CODE_AUTHENTICATION_FAILURE) ||
+                (auth_status == ERROR_CODE_PIN_OR_KEY_MISSING) ||
+                (auth_status == ERROR_CODE_PAIRING_NOT_ALLOWED)){
+
+                bt_device_t * refused = device_for_handle(auth_handle);
+                if (refused != NULL){
+                    service_log("service: %s refused our link key, dropping it - pair it again\n",
+                                bd_addr_to_str(refused->info.bd_addr));
+                    if (refused->info.addr_type == 0xff){
+                        gap_drop_link_key_for_bd_addr(refused->info.bd_addr);
+                    } else {
+                        gap_delete_bonding((bd_addr_type_t) refused->info.addr_type,
+                                           refused->info.bd_addr);
+                    }
+                    refused->autoconnect = false;
+                    devices_store();
+                }
+
+                /*
+                 * And do not carry on to the profile. An unauthenticated link
+                 * cannot carry A2DP, so attempting it only waits out the L2CAP
+                 * timeout and reports that instead of the real reason.
+                 */
+                gap_disconnect(auth_handle);
+            }
             break;
+        }
 
         /*
          * A Classic device that connects to us arrives with no name.
