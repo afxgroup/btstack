@@ -484,14 +484,35 @@ static void connection_timeout_handler(btstack_timer_source_t * ts){
      * inquiry result found an attempt still "in progress".
      */
     if (pending_device->info.addr_type == 0xff){
+        /*
+         * Everything shared is settled before calling the handler, and the
+         * device is held in a local.
+         *
+         * handler->disconnect() reports back through handler_status(), which
+         * clears pending_device when the failing device is the pending one. So
+         * using pending_device after that call read a global the call had just
+         * set to NULL - and device_set_state() on it took the service down
+         * mid-pairing. The entry itself stays valid throughout: devices[] is a
+         * static array, and only the pointer to "the attempt in progress" goes
+         * away.
+         *
+         * Ordering it this way also makes the re-entrant handler_status()
+         * correct rather than merely survivable: it finds pending_device
+         * already cleared, so it does not touch the timer that is running it.
+         */
+        bt_device_t * timed_out = pending_device;
+
         service_log("service: connection to %s timed out (classic)\n",
-                    bd_addr_to_str(pending_device->info.bd_addr));
-        if ((pending_device->handler != NULL) && (pending_device->handler->disconnect != NULL)){
-            pending_device->handler->disconnect(pending_device->con_handle);
-        }
-        device_set_state(pending_device, BT_DEVICE_STATE_FOUND);
+                    bd_addr_to_str(timed_out->info.bd_addr));
+
         pending_device = NULL;
         connection_cancel_pending_for = NULL;
+        device_set_state(timed_out, BT_DEVICE_STATE_FOUND);
+
+        if ((timed_out->handler != NULL) && (timed_out->handler->disconnect != NULL)){
+            timed_out->handler->disconnect(timed_out->con_handle);
+        }
+
         connection_retry_later();
         return;
     }
