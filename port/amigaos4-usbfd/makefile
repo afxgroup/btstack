@@ -11,7 +11,14 @@ CC      = ppc-amigaos-gcc
 STRIP   = ppc-amigaos-strip
 CRT    ?= newlib
 
-CFLAGS  = -mcrt=$(CRT) -mstrict-align -Wall -Wwrite-strings \
+# -ffreestanding and -fno-tree-loop-distribute-patterns: this driver links
+# -nostartfiles and must call no C library at all, which is what bt_zero()
+# exists for. Without these the loop-idiom pass turns that hand-written loop
+# straight back into a memset() call at -O3 - so the binary really did carry
+# one, reached through an interface the missing runtime never sets.
+CFLAGS  = -mcrt=$(CRT) -mstrict-align -ffreestanding \
+          -fno-tree-loop-distribute-patterns \
+          -Wall -Wwrite-strings \
           -O3 -fomit-frame-pointer \
           -I. -D__NOLIBBASE__ -D__NOGLOBALIFACE__
 

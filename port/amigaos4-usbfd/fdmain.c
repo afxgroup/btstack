@@ -56,6 +56,12 @@ static APTR MyFDKey;
  * behind it. A function driver is initialised at the very start of the boot,
  * long before that is a reasonable thing to ask for, and it is where the boot
  * stopped. Nothing else here needs a C library, so now nothing opens one.
+ *
+ * Writing the loop by hand is not enough on its own: at -O3 the compiler
+ * recognises it and emits the very memset() call it replaced, which the
+ * binary then reached through an interface no runtime had set. The makefile
+ * carries -ffreestanding -fno-tree-loop-distribute-patterns to stop that, and
+ * removing them puts the call back.
  */
 static void bt_zero(APTR block, uint32 size)
 {
