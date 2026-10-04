@@ -544,7 +544,15 @@ static int usb_open(void){
     printf("usb_open: device opened OK\n");
 
     struct libusb_config_descriptor * config;
-    r = libusb_get_config_descriptor(usb_handle->dev, 0, &config);
+    /*
+     * Through libusb_get_device(), not usb_handle->dev.
+     *
+     * libusb_device_handle is an opaque type in libusb proper, and the
+     * AmigaOS 4 library is moving the same way - a build against an opaque
+     * handle cannot reach the member at all. The accessor has always been
+     * there and works either way, so there is nothing to condition.
+     */
+    r = libusb_get_config_descriptor(libusb_get_device(usb_handle), 0, &config);
     if (r != 0){ printf("usb_open: get_config_descriptor failed: %d\n", r); libusb_close(usb_handle); libusb_exit(usb_ctx); usb_ctx = NULL; return -1; }
 
     if (usb_find_endpoints(config) != 0){ libusb_free_config_descriptor(config); libusb_close(usb_handle); libusb_exit(usb_ctx); usb_ctx = NULL; return -1; }
@@ -636,7 +644,7 @@ static int usb_open(void){
     event_next = 0;
 
     usb_transport_open = 1;
-    usb_bus = libusb_get_bus_number(usb_handle->dev);
+    usb_bus = libusb_get_bus_number(libusb_get_device(usb_handle));
 
     /* let the run loop wake up as soon as a transfer completes, instead of
      * waiting for the next poll tick */
